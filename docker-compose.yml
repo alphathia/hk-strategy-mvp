@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  streamlit:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_URL=postgresql://trader:trading123@postgres:5432/hk_strategy
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./src:/app/src
+    networks:
+      - hk-strategy-network
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=hk_strategy
+      - POSTGRES_USER=trader
+      - POSTGRES_PASSWORD=trading123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - hk-strategy-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - hk-strategy-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  hk-strategy-network:
+    driver: bridge
