@@ -1,0 +1,134 @@
+# HK Strategy Portfolio Dashboard Configuration Template
+# 
+# SECURITY NOTICE:
+# 1. Copy this file to app_config.yaml
+# 2. Fill in your actual passwords and sensitive data
+# 3. NEVER commit app_config.yaml to git
+# 4. Keep this template file for reference
+
+# Database Configuration
+database:
+  host: localhost
+  port: 5432
+  name: hk_strategy
+  user: trader
+  password: "CHANGE_ME_TO_YOUR_SECURE_PASSWORD"  # Use a strong password
+  
+  # Connection pool settings
+  min_connections: 1
+  max_connections: 10
+  connection_timeout: 30
+  
+# Redis Cache Configuration
+redis:
+  host: localhost
+  port: 6379
+  database: 0
+  password: null  # Set to your Redis password if authentication is enabled
+  
+  # Redis connection settings
+  socket_timeout: 5
+  connection_timeout: 10
+  max_connections: 50
+  
+# API Configuration
+apis:
+  yahoo_finance:
+    enabled: true
+    rate_limit_per_minute: 100
+    timeout_seconds: 10
+    retry_attempts: 3
+    
+  # Future API integrations
+  # alpha_vantage:
+  #   api_key: "YOUR_ALPHA_VANTAGE_API_KEY"
+  #   enabled: false
+    
+# Application Settings
+app:
+  name: "HK Strategy Portfolio Dashboard"
+  version: "1.0.0"
+  environment: "production"  # development, staging, production
+  debug: false
+  
+  # Server settings
+  host: "0.0.0.0"
+  port: 8501
+  
+  # Logging configuration
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file: "logs/app.log"
+  log_max_size: "10MB"
+  log_backup_count: 5
+  
+# Security Settings
+security:
+  # Session management
+  session_timeout: 3600  # seconds (1 hour)
+  max_login_attempts: 5
+  lockout_duration: 900   # seconds (15 minutes)
+  
+  # Data encryption
+  secret_key: "CHANGE_ME_TO_A_RANDOM_SECRET_KEY"  # Generate with: openssl rand -hex 32
+  
+  # CORS settings
+  allowed_origins:
+    - "http://localhost:8501"
+    - "http://127.0.0.1:8501"
+    
+# Portfolio Settings
+portfolio:
+  # Default portfolio settings
+  default_currency: "HKD"
+  
+  # Price update settings
+  price_update_interval: 300  # seconds (5 minutes)
+  price_cache_duration: 300   # seconds (5 minutes)
+  
+  # Supported markets
+  supported_markets:
+    - "HKEX"  # Hong Kong Exchange
+    - "NYSE"  # New York Stock Exchange
+    - "NASDAQ"  # NASDAQ
+    
+# Notification Settings (for future use)
+notifications:
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    username: "your_email@gmail.com"
+    password: "your_app_password"
+    
+  slack:
+    enabled: false
+    webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    
+# Monitoring and Alerting
+monitoring:
+  enabled: true
+  
+  # Health check settings
+  health_check_interval: 60  # seconds
+  
+  # Alert thresholds
+  alerts:
+    database_connection_timeout: 30  # seconds
+    redis_connection_timeout: 10     # seconds
+    api_response_timeout: 15         # seconds
+    
+# Backup Configuration
+backup:
+  enabled: true
+  
+  # Database backup settings
+  database_backup:
+    frequency: "daily"  # hourly, daily, weekly
+    retention_days: 30
+    backup_location: "backups/database"
+    
+  # Configuration backup
+  config_backup:
+    frequency: "weekly"
+    retention_weeks: 4
+    backup_location: "backups/config"

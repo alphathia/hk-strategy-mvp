@@ -6,7 +6,7 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - DATABASE_URL=postgresql://trader:trading123@postgres:5432/hk_strategy
+      - DATABASE_URL=postgresql://trader:YOUR_SECURE_PASSWORD@postgres:5432/hk_strategy
       - REDIS_URL=redis://redis:6379
     depends_on:
       - postgres

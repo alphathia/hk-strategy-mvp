@@ -142,3 +142,16 @@ Thumbs.db
 
 # Docker
 .dockerignore
+
+# Security - Configuration files with sensitive data (NEVER commit these)
+config/app_config.yaml
+config/.env
+*.yaml.backup
+*.env.backup
+
+# Application logs
+logs/
+*.log
+
+# Backup files
+backups/
