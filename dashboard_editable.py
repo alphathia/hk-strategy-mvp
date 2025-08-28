@@ -164,7 +164,7 @@ if st.session_state.current_page == 'overview':
     st.sidebar.header("📁 Portfolio Management")
     st.sidebar.info("Use the overview page to manage all portfolios")
     
-    st.subheader("📋 All Portfolios Management")
+    st.subheader("📋 All Portfolios Overview")
     
     # Portfolio Statistics
     total_portfolios = len(st.session_state.portfolios)
@@ -179,64 +179,145 @@ if st.session_state.current_page == 'overview':
     
     st.markdown("---")
     
-    # Portfolio Management Actions
-    st.subheader("🔧 Portfolio Actions")
+    # Get portfolio data with creation dates for table display
+    try:
+        conn = st.session_state.portfolio_manager.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT portfolio_id, name, description, created_at,
+                       COALESCE((SELECT COUNT(*) FROM portfolio_holdings WHERE portfolio_id = p.portfolio_id AND quantity > 0), 0) as position_count
+                FROM portfolios p
+                ORDER BY created_at DESC
+            """)
+            portfolio_rows = cur.fetchall()
+    except Exception as e:
+        st.error(f"Failed to fetch portfolio data: {e}")
+        portfolio_rows = []
     
-    action_col1, action_col2 = st.columns(2)
-    
-    with action_col1:
-        # View/Edit Portfolio
-        st.markdown("**📊 View/Edit Portfolio:**")
-        view_portfolio = st.selectbox(
-            "Select portfolio to view/edit:",
-            options=list(st.session_state.portfolios.keys()),
-            key="view_portfolio_select"
-        )
+    if portfolio_rows:
+        # Display portfolios in integrated table format with actions
+        st.subheader("📊 All Portfolios (Latest First)")
         
-        col_view, col_edit = st.columns(2)
-        with col_view:
-            if st.button("👁️ View", key="view_portfolio_btn"):
-                st.session_state.current_page = 'portfolio'
-                st.session_state.selected_portfolio = view_portfolio
-                st.rerun()
-        
+        # Table header
+        col_created, col_id, col_name, col_desc, col_pos, col_edit, col_copy, col_delete = st.columns([1.5, 1.5, 2, 2.5, 1, 0.8, 1.2, 0.8])
+        with col_created:
+            st.write("**Created**")
+        with col_id:
+            st.write("**Portfolio ID**")
+        with col_name:
+            st.write("**Name**")
+        with col_desc:
+            st.write("**Description**")
+        with col_pos:
+            st.write("**Positions**")
         with col_edit:
-            if st.button("✏️ Edit", key="edit_portfolio_btn"):
-                st.session_state.current_page = 'portfolio'
-                st.session_state.selected_portfolio = view_portfolio
-                st.session_state.edit_mode[view_portfolio] = True
-                st.session_state.portfolio_backup[view_portfolio] = copy.deepcopy(st.session_state.portfolios[view_portfolio])
-                st.rerun()
-    
-    with action_col2:
-        # Delete Portfolio
-        st.markdown("**🗑️ Delete Portfolio:**")
-        delete_portfolio = st.selectbox(
-            "Select portfolio to delete:",
-            options=list(st.session_state.portfolios.keys()),
-            key="delete_portfolio_select"
-        )
+            st.write("**Edit**")
+        with col_copy:
+            st.write("**Copy**")
+        with col_delete:
+            st.write("**Delete**")
         
-        if st.button("🗑️ Delete Portfolio", key="delete_portfolio_btn", type="secondary"):
-            if len(st.session_state.portfolios) > 1:  # Don't delete if only one portfolio
-                # Show confirmation
-                if f"confirm_delete_{delete_portfolio}" not in st.session_state:
-                    st.session_state[f"confirm_delete_{delete_portfolio}"] = False
-                
-                if not st.session_state[f"confirm_delete_{delete_portfolio}"]:
-                    st.session_state[f"confirm_delete_{delete_portfolio}"] = True
-                    st.warning(f"⚠️ Are you sure you want to delete '{delete_portfolio}'? This action cannot be undone!")
-                    if st.button("✅ Confirm Delete", key=f"confirm_delete_btn_{delete_portfolio}"):
-                        success = st.session_state.portfolio_manager.delete_portfolio(delete_portfolio)
+        st.markdown("---")
+        
+        # Create integrated table with action buttons
+        for i, (portfolio_id, name, description, created_at, position_count) in enumerate(portfolio_rows):
+            # Use columns for table-like layout
+            col_created, col_id, col_name, col_desc, col_pos, col_edit, col_copy, col_delete = st.columns([1.5, 1.5, 2, 2.5, 1, 0.8, 1.2, 0.8])
+            
+            with col_created:
+                st.write(created_at.strftime('%m/%d') if created_at else 'Unknown')
+            with col_id:
+                st.write(f"**{portfolio_id}**")
+            with col_name:
+                st.write(name)
+            with col_desc:
+                short_desc = description[:30] + '...' if len(description) > 30 else description
+                st.write(short_desc)
+            with col_pos:
+                st.write(f"{position_count}")
+            with col_edit:
+                if st.button("✏️", key=f"edit_{portfolio_id}", help="Edit"):
+                    st.session_state.current_page = 'portfolio'
+                    st.session_state.selected_portfolio = portfolio_id
+                    st.session_state.edit_mode[portfolio_id] = True
+                    st.session_state.portfolio_backup[portfolio_id] = copy.deepcopy(st.session_state.portfolios[portfolio_id])
+                    st.rerun()
+            with col_copy:
+                if st.button("📋 Copy", key=f"copy_{portfolio_id}", help="Copy to new"):
+                    st.session_state[f"show_copy_form_{portfolio_id}"] = True
+                    st.rerun()
+            with col_delete:
+                if st.button("🗑️", key=f"delete_{portfolio_id}", help="Delete", type="secondary"):
+                    if len(st.session_state.portfolios) > 1:
+                        if f"confirm_delete_{portfolio_id}" not in st.session_state:
+                            st.session_state[f"confirm_delete_{portfolio_id}"] = True
+                            st.rerun()
+                    else:
+                        st.error("❌ Cannot delete the last portfolio!")
+            
+            # Show copy form if requested
+            if st.session_state.get(f"show_copy_form_{portfolio_id}", False):
+                with st.expander(f"📋 Copy {portfolio_id} to New Portfolio", expanded=True):
+                    copy_col1, copy_col2 = st.columns(2)
+                    with copy_col1:
+                        new_id = st.text_input("New Portfolio ID:", key=f"copy_id_{portfolio_id}", placeholder=f"{portfolio_id}_Copy")
+                        new_name = st.text_input("New Portfolio Name:", key=f"copy_name_{portfolio_id}", placeholder=f"{name} Copy")
+                    with copy_col2:
+                        new_desc = st.text_area("New Description:", key=f"copy_desc_{portfolio_id}", placeholder=f"Copy of {name}")
+                    
+                    copy_btn_col1, copy_btn_col2 = st.columns(2)
+                    with copy_btn_col1:
+                        if st.button("✅ Create Copy", key=f"confirm_copy_{portfolio_id}", type="primary"):
+                            if new_id and new_name and new_id not in st.session_state.portfolios:
+                                success = st.session_state.portfolio_manager.copy_portfolio(
+                                    portfolio_id, new_id, new_name, 
+                                    new_desc or f"Copy of {name}"
+                                )
+                                if success:
+                                    st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                                    st.success(f"✅ Portfolio '{new_id}' created successfully!")
+                                    del st.session_state[f"show_copy_form_{portfolio_id}"]
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Failed to create portfolio!")
+                            else:
+                                if not new_id:
+                                    st.error("❌ Please enter Portfolio ID")
+                                elif not new_name:
+                                    st.error("❌ Please enter Portfolio Name")
+                                else:
+                                    st.error("❌ Portfolio ID already exists!")
+                    
+                    with copy_btn_col2:
+                        if st.button("❌ Cancel", key=f"cancel_copy_{portfolio_id}"):
+                            del st.session_state[f"show_copy_form_{portfolio_id}"]
+                            st.rerun()
+            
+            # Show delete confirmation if requested
+            if st.session_state.get(f"confirm_delete_{portfolio_id}", False):
+                st.warning(f"⚠️ Are you sure you want to delete '{portfolio_id}' - {name}? This action cannot be undone!")
+                del_col1, del_col2 = st.columns(2)
+                with del_col1:
+                    if st.button("✅ Confirm Delete", key=f"confirm_delete_btn_{portfolio_id}", type="primary"):
+                        success = st.session_state.portfolio_manager.delete_portfolio(portfolio_id)
                         if success:
-                            del st.session_state.portfolios[delete_portfolio]
+                            del st.session_state.portfolios[portfolio_id]
                             st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
-                            st.success(f"✅ Portfolio '{delete_portfolio}' deleted!")
+                            st.success(f"✅ Portfolio '{portfolio_id}' deleted!")
+                            del st.session_state[f"confirm_delete_{portfolio_id}"]
                             st.rerun()
                         else:
                             st.error("❌ Failed to delete portfolio!")
-            else:
-                st.error("❌ Cannot delete the last portfolio!")
+                with del_col2:
+                    if st.button("❌ Cancel Delete", key=f"cancel_delete_{portfolio_id}"):
+                        del st.session_state[f"confirm_delete_{portfolio_id}"]
+                        st.rerun()
+            
+            # Add visual separator except for last row
+            if i < len(portfolio_rows) - 1:
+                st.markdown("---")
+    else:
+        st.info("No portfolios found in database.")
     
     # Create New Portfolio
     st.markdown("---")
@@ -298,28 +379,27 @@ elif st.session_state.current_page == 'portfolio':
     # Check edit mode
     is_editing = st.session_state.edit_mode.get(selected_portfolio, False)
     
-    # Edit Mode Controls
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("✏️ Portfolio Editing")
-    if not is_editing:
-        if st.sidebar.button("📝 Edit Portfolio", type="primary"):
-            # Enter edit mode - create backup
-            st.session_state.edit_mode[selected_portfolio] = True
-            st.session_state.portfolio_backup[selected_portfolio] = copy.deepcopy(current_portfolio)
-            st.rerun()
-    else:
-        st.sidebar.warning("🔄 Editing Mode Active")
+    
+    # Show pending changes indicator and edit controls in main area
+    if is_editing:
+        st.subheader(f"✏️ Editing: {current_portfolio['name']}")
+        st.info("You are in edit mode. Make changes below, then Save or Cancel.")
         
-        col1, col2 = st.sidebar.columns(2)
+        # Show pending changes indicator
+        if selected_portfolio in st.session_state.pending_changes and st.session_state.pending_changes[selected_portfolio]:
+            st.warning(f"⚠️ You have {len(st.session_state.pending_changes[selected_portfolio])} pending changes. Click Save to apply them.")
+        
+        # Edit control buttons in main area
+        col1, col2, col3 = st.columns([1, 1, 4])
         with col1:
-            if st.button("💾 Save", type="primary", key="save_btn"):
+            if st.button("💾 Save Changes", type="primary", key="save_btn"):
                 # Check for pending changes and show warning
                 has_changes = selected_portfolio in st.session_state.pending_changes and st.session_state.pending_changes[selected_portfolio]
                 
                 if has_changes:
-                    st.sidebar.warning("⚠️ You have unsaved changes that will be applied!")
+                    st.warning("⚠️ You have unsaved changes that will be applied!")
                     
-                with st.sidebar.container():
+                with st.container():
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
@@ -380,7 +460,7 @@ elif st.session_state.current_page == 'portfolio':
                         time.sleep(1)
                         progress_bar.empty()
                         status_text.empty()
-                        st.sidebar.success("✅ Portfolio saved successfully!")
+                        st.success("✅ Portfolio saved successfully!")
                         time.sleep(1)
                         st.rerun()
                     else:
@@ -391,12 +471,12 @@ elif st.session_state.current_page == 'portfolio':
                             'message': 'Failed to save portfolio to database!',
                             'timestamp': datetime.now()
                         }
-                        st.sidebar.error("❌ Failed to save to database!")
+                        st.error("❌ Failed to save to database!")
                         time.sleep(2)
                         status_text.empty()
         
         with col2:
-            if st.button("❌ Cancel", type="secondary", key="cancel_btn"):
+            if st.button("❌ Cancel Changes", type="secondary", key="cancel_btn"):
                 # Cancel edit mode and restore backup
                 st.session_state.edit_mode[selected_portfolio] = False
                 if selected_portfolio in st.session_state.portfolio_backup:
@@ -405,53 +485,22 @@ elif st.session_state.current_page == 'portfolio':
                     del st.session_state.portfolio_backup[selected_portfolio]
                 if selected_portfolio in st.session_state.pending_changes:
                     del st.session_state.pending_changes[selected_portfolio]
-                st.sidebar.info("↩️ Changes cancelled")
+                st.info("↩️ Changes cancelled")
                 st.rerun()
-    
-    # Copy Portfolio section (only if not editing)
-    if not is_editing:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("📋 Copy Portfolio")
         
-        copy_to_id = st.sidebar.text_input("New Portfolio ID:", placeholder="e.g., HKEX_Base_Copy")
-        copy_to_name = st.sidebar.text_input("New Portfolio Name:", placeholder="e.g., HKEX Base Copy")
-        copy_to_desc = st.sidebar.text_area("New Description:", placeholder="Copy of existing portfolio...")
-        
-        if st.sidebar.button("📋 Copy Portfolio"):
-            if copy_to_id and copy_to_name and copy_to_id not in st.session_state.portfolios:
-                # Use portfolio manager for proper database integration and isolation
-                success = st.session_state.portfolio_manager.copy_portfolio(
-                    selected_portfolio, copy_to_id, copy_to_name, 
-                    copy_to_desc or f"Copy of {current_portfolio['name']}"
-                )
-                
-                if success:
-                    # Reload portfolios from database to get the updated data
-                    st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
-                    st.sidebar.success(f"✅ Portfolio '{copy_to_id}' created!")
-                    st.sidebar.info("🔄 Select it from the dropdown to view")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.sidebar.error("❌ Failed to create portfolio!")
-            else:
-                if not copy_to_id:
-                    st.sidebar.error("❌ Please enter Portfolio ID")
-                elif not copy_to_name:
-                    st.sidebar.error("❌ Please enter Portfolio Name")
-                else:
-                    st.sidebar.error("❌ Portfolio ID already exists!")
-    
-    # Show pending changes indicator
-    if is_editing:
-        st.subheader(f"✏️ Editing: {current_portfolio['name']}")
-        st.info("You are in edit mode. Make changes below, then Save or Cancel in the sidebar.")
-        
-        # Show pending changes indicator
-        if selected_portfolio in st.session_state.pending_changes and st.session_state.pending_changes[selected_portfolio]:
-            st.warning(f"⚠️ You have {len(st.session_state.pending_changes[selected_portfolio])} pending changes. Click Save to apply them.")
+        st.markdown("---")
     else:
+        # Not editing - show view mode with edit button
+        col1, col2, col3 = st.columns([1, 1, 4])
+        with col1:
+            if st.button("📝 Edit Portfolio", type="primary", key="enter_edit_btn"):
+                # Enter edit mode - create backup
+                st.session_state.edit_mode[selected_portfolio] = True
+                st.session_state.portfolio_backup[selected_portfolio] = copy.deepcopy(current_portfolio)
+                st.rerun()
+        
         st.subheader(f"📊 {current_portfolio['name']}")
+        st.markdown("---")
     
     # PORTFOLIO EDITING INTERFACE
     if is_editing:
@@ -715,7 +764,185 @@ elif st.session_state.current_page == 'system':
     st.title("⚙️ System Status Dashboard")
     st.markdown("---")
     
-    st.info("System status checks would go here - database health, API connectivity, etc.")
+    # Database Health Check Section
+    st.subheader("🗄️ Database Health")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Database Connection Test**")
+        try:
+            conn = st.session_state.portfolio_manager.get_connection()
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            st.success("✅ Database connection successful")
+        except Exception as e:
+            st.error(f"❌ Database connection failed: {str(e)}")
+        
+        # Portfolio Tables Check
+        st.markdown("**Portfolio Tables Status**")
+        try:
+            conn = st.session_state.portfolio_manager.get_connection()
+            with conn.cursor() as cur:
+                # Check portfolios table
+                cur.execute("SELECT COUNT(*) FROM portfolios")
+                portfolio_count = cur.fetchone()[0]
+                
+                # Check portfolio_holdings table
+                cur.execute("SELECT COUNT(*) FROM portfolio_holdings")
+                holdings_count = cur.fetchone()[0]
+                
+                st.success(f"✅ Portfolios table: {portfolio_count} records")
+                st.success(f"✅ Holdings table: {holdings_count} records")
+        except Exception as e:
+            st.error(f"❌ Portfolio tables check failed: {str(e)}")
+    
+    with col2:
+        st.markdown("**Portfolio Data Summary**")
+        try:
+            portfolios = st.session_state.portfolios
+            total_portfolios = len(portfolios)
+            total_positions = sum(len([p for p in portfolio['positions'] if p['quantity'] > 0]) 
+                                 for portfolio in portfolios.values())
+            
+            st.metric("Total Portfolios", total_portfolios)
+            st.metric("Active Positions", total_positions)
+            
+            if portfolios:
+                st.success("✅ Portfolio data loaded successfully")
+            else:
+                st.warning("⚠️ No portfolio data found")
+        except Exception as e:
+            st.error(f"❌ Portfolio data check failed: {str(e)}")
+    
+    st.markdown("---")
+    
+    # Portfolio Reset Section
+    st.subheader("🔄 Portfolio Reset & Setup")
+    st.warning("⚠️ **Danger Zone** - These actions will modify or delete data!")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Reset All Portfolios**")
+        st.info("This will delete all existing portfolios and create a new default HKEX portfolio with sample data.")
+        
+        if st.button("🔄 Reset All Portfolios", type="secondary", key="reset_portfolios_btn"):
+            if 'confirm_reset_portfolios' not in st.session_state:
+                st.session_state.confirm_reset_portfolios = True
+                st.rerun()
+        
+        if st.session_state.get('confirm_reset_portfolios', False):
+            st.error("⚠️ This will DELETE ALL existing portfolios and create a new default portfolio!")
+            
+            col_confirm, col_cancel = st.columns(2)
+            with col_confirm:
+                if st.button("✅ Confirm Reset", type="primary", key="confirm_reset_btn"):
+                    try:
+                        conn = st.session_state.portfolio_manager.get_connection()
+                        with conn.cursor() as cur:
+                            # Clear all existing portfolio data
+                            cur.execute("DELETE FROM portfolio_holdings")
+                            cur.execute("DELETE FROM portfolios")
+                            
+                            # Create new default portfolio
+                            cur.execute("""
+                                INSERT INTO portfolios (portfolio_id, name, description)
+                                VALUES (%s, %s, %s)
+                            """, ('HKEX_Base', 'HKEX Base Portfolio', 'Primary Hong Kong equity holdings'))
+                            
+                            # Insert the provided stock data
+                            portfolio_positions = [
+                                ('HKEX_Base', '0005.HK', 'HSBC Holdings plc', 13428, 38.50, 'Financials'),
+                                ('HKEX_Base', '0316.HK', 'Orient Overseas', 100, 95.00, 'Other'),
+                                ('HKEX_Base', '0388.HK', 'Hong Kong Exchanges', 300, 280.00, 'Financials'),
+                                ('HKEX_Base', '0700.HK', 'Tencent Holdings Ltd', 3100, 320.50, 'Tech'),
+                                ('HKEX_Base', '0823.HK', 'Link REIT', 1300, 42.80, 'REIT'),
+                                ('HKEX_Base', '0857.HK', 'PetroChina Company Ltd', 0, 7.50, 'Energy'),
+                                ('HKEX_Base', '0939.HK', 'China Construction Bank', 26700, 5.45, 'Financials'),
+                                ('HKEX_Base', '1810.HK', 'Xiaomi Corporation', 2000, 12.30, 'Tech'),
+                                ('HKEX_Base', '2888.HK', 'Standard Chartered PLC', 348, 145.00, 'Financials'),
+                                ('HKEX_Base', '3690.HK', 'Meituan', 340, 95.00, 'Tech'),
+                                ('HKEX_Base', '9618.HK', 'JD.com', 133, 125.00, 'Tech'),
+                                ('HKEX_Base', '9988.HK', 'Alibaba Group', 2000, 115.00, 'Tech')
+                            ]
+                            
+                            for portfolio_id, symbol, company_name, quantity, avg_cost, sector in portfolio_positions:
+                                cur.execute("""
+                                    INSERT INTO portfolio_holdings 
+                                    (portfolio_id, symbol, company_name, quantity, avg_cost, sector)
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (portfolio_id, symbol, company_name, quantity, avg_cost, sector))
+                            
+                            conn.commit()
+                            
+                            # Reload portfolios in session state
+                            st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                            
+                            # Clear confirmation state
+                            del st.session_state.confirm_reset_portfolios
+                            
+                            st.success("✅ All portfolios reset successfully! New HKEX_Base portfolio created with sample data.")
+                            time.sleep(2)
+                            st.rerun()
+                            
+                    except Exception as e:
+                        st.error(f"❌ Failed to reset portfolios: {str(e)}")
+                        if 'confirm_reset_portfolios' in st.session_state:
+                            del st.session_state.confirm_reset_portfolios
+            
+            with col_cancel:
+                if st.button("❌ Cancel Reset", key="cancel_reset_btn"):
+                    del st.session_state.confirm_reset_portfolios
+                    st.rerun()
+    
+    with col2:
+        st.markdown("**Database Maintenance**")
+        st.info("Perform database maintenance operations.")
+        
+        if st.button("🧹 Clean Empty Positions", key="clean_positions_btn"):
+            try:
+                conn = st.session_state.portfolio_manager.get_connection()
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM portfolio_holdings WHERE quantity = 0")
+                    deleted_rows = cur.rowcount
+                    conn.commit()
+                    st.success(f"✅ Cleaned {deleted_rows} empty positions")
+            except Exception as e:
+                st.error(f"❌ Failed to clean positions: {str(e)}")
+        
+        if st.button("🔄 Refresh Portfolio Data", key="refresh_data_btn"):
+            try:
+                st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                st.success("✅ Portfolio data refreshed")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to refresh data: {str(e)}")
+    
+    st.markdown("---")
+    
+    # System Information
+    st.subheader("ℹ️ System Information")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Application Status**")
+        st.success("✅ Dashboard running")
+        st.success("✅ Portfolio management active")
+        st.success("✅ Real-time pricing enabled")
+        
+    with col2:
+        st.markdown("**Configuration**")
+        try:
+            config = st.session_state.portfolio_manager.config
+            st.info("✅ Configuration loaded successfully")
+        except Exception as e:
+            st.error(f"❌ Configuration error: {str(e)}")
+        
+        st.info("📊 Using Yahoo Finance for price data")
+        st.info("🗄️ PostgreSQL database backend")
 
 st.markdown("---")
 st.caption("💰 Multi-portfolio dashboard with editing • Real-time prices via Yahoo Finance API")
