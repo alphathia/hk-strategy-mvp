@@ -74,7 +74,7 @@ if 'portfolio_backup' not in st.session_state:
     st.session_state.portfolio_backup = {}
 
 if 'current_page' not in st.session_state:
-    st.session_state.current_page = 'portfolio'
+    st.session_state.current_page = 'overview'  # Start with overview by default
 
 if 'pending_changes' not in st.session_state:
     st.session_state.pending_changes = {}
@@ -499,27 +499,99 @@ def get_system_info():
     except Exception as e:
         return {"Error": str(e)}
 
-# Navigation Sidebar
-st.sidebar.header("🧭 Navigation")
+# Initialize unified navigation state
+if 'navigation' not in st.session_state:
+    st.session_state.navigation = {
+        'section': 'portfolios',
+        'page': 'overview', 
+        'context': {},
+        'breadcrumbs': []
+    }
 
-# Page selection
-page_options = {
-    'portfolio': '📊 Portfolio Dashboard',
-    'pv_analysis': '📈 Portfolio Value Analysis',
-    'overview': '📋 All Portfolios Overview',
-    'system': '⚙️ System Status'
+# Unified Navigation Structure
+navigation_structure = {
+    'portfolios': {
+        'icon': '📊',
+        'label': 'PORTFOLIOS',
+        'pages': {
+            'overview': '📋 All Portfolios Overview',
+            'portfolio': '📊 Portfolio Dashboard', 
+            'pv_analysis': '📈 Portfolio Value Analysis'
+        }
+    },
+    'strategy': {
+        'icon': '🎯', 
+        'label': 'STRATEGY ANALYSIS',
+        'pages': {
+            'equity_analysis': '📈 Equity Strategy Analysis',
+            'strategy_editor': '⚙️ Strategy Editor',
+            'strategy_comparison': '📊 Strategy Comparison'
+        }
+    },
+    'system': {
+        'icon': '🔧',
+        'label': 'SYSTEM & ADMIN',
+        'pages': {
+            'system_status': '⚙️ System Status',
+            'database_admin': '🗄️ Database Management',
+            'user_settings': '📋 User Settings'
+        }
+    }
 }
 
-current_page = st.sidebar.selectbox(
-    "Select Page:",
-    options=list(page_options.keys()),
-    format_func=lambda x: page_options[x],
-    index=list(page_options.keys()).index(st.session_state.current_page)
-)
+# Sidebar Navigation Header
+st.sidebar.markdown("""
+<div style='text-align: center; padding: 10px 0;'>
+    <h3 style='margin: 0; color: #1f77b4;'>🏠 HK Strategy</h3>
+    <p style='margin: 0; font-size: 12px; color: #8e8ea0;'>Multi-Dashboard System</p>
+</div>
+""", unsafe_allow_html=True)
+st.sidebar.markdown("---")
 
-if current_page != st.session_state.current_page:
-    st.session_state.current_page = current_page
-    st.rerun()
+# Build Hierarchical Navigation
+for section_key, section_data in navigation_structure.items():
+    with st.sidebar.expander(f"{section_data['icon']} {section_data['label']}", 
+                           expanded=(st.session_state.navigation['section'] == section_key)):
+        
+        for page_key, page_label in section_data['pages'].items():
+            # Create unique key for each page button
+            button_key = f"nav_{section_key}_{page_key}"
+            
+            # Check if this is the current page
+            is_current = (st.session_state.navigation['section'] == section_key and 
+                         st.session_state.navigation.get('page') == page_key)
+            
+            # Handle legacy page mapping for existing functionality
+            legacy_page_map = {
+                ('portfolios', 'overview'): 'overview',
+                ('portfolios', 'portfolio'): 'portfolio', 
+                ('portfolios', 'pv_analysis'): 'pv_analysis',
+                ('strategy', 'equity_analysis'): 'equity_analysis',
+                ('strategy', 'strategy_editor'): 'strategy_editor',
+                ('strategy', 'strategy_comparison'): 'strategy_comparison',
+                ('system', 'system_status'): 'system'
+            }
+            
+            # Determine if page is available (existing vs future)
+            is_available = (section_key, page_key) in legacy_page_map
+            
+            if is_available:
+                button_type = "primary" if is_current else "secondary"
+                if st.button(page_label, key=button_key, type=button_type, use_container_width=True):
+                    # Update navigation state
+                    st.session_state.navigation['section'] = section_key
+                    st.session_state.navigation['page'] = page_key
+                    
+                    # Map to legacy current_page for compatibility
+                    legacy_page = legacy_page_map.get((section_key, page_key))
+                    if legacy_page:
+                        st.session_state.current_page = legacy_page
+                    
+                    st.rerun()
+            else:
+                # Future/unavailable pages
+                st.markdown(f"<div style='padding: 8px; color: #8e8ea0; font-size: 14px;'>{page_label} <em>(Coming Soon)</em></div>", 
+                           unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 
@@ -815,6 +887,57 @@ with col2:
     if st.button("⚙️ System", use_container_width=True):
         st.session_state.current_page = 'system'
         st.rerun()
+
+# Breadcrumb Navigation Function
+def generate_breadcrumbs():
+    """Generate breadcrumb navigation based on current navigation state"""
+    breadcrumbs = ["🏠 Home"]
+    
+    # Get current navigation state
+    nav_state = st.session_state.navigation
+    current_section = nav_state.get('section', 'portfolios')
+    current_page = nav_state.get('page', 'overview')
+    
+    # Add section to breadcrumbs
+    section_labels = {
+        'portfolios': '📊 Portfolios',
+        'strategy': '🎯 Strategy Analysis', 
+        'system': '🔧 System & Admin'
+    }
+    
+    if current_section in section_labels:
+        breadcrumbs.append(section_labels[current_section])
+    
+    # Add current page context
+    if current_section == 'portfolios':
+        if current_page == 'overview':
+            breadcrumbs.append('📋 All Portfolios')
+        elif current_page == 'portfolio':
+            breadcrumbs.append('📊 Portfolio View')
+            # Add portfolio name if available
+            portfolio_keys = list(st.session_state.portfolios.keys()) if st.session_state.portfolios else []
+            if portfolio_keys and hasattr(st.session_state, 'selected_portfolio_for_pv'):
+                selected = st.session_state.selected_portfolio_for_pv
+                if selected in st.session_state.portfolios:
+                    breadcrumbs.append(f"📂 {st.session_state.portfolios[selected]['name']}")
+        elif current_page == 'pv_analysis':
+            breadcrumbs.append('📈 Value Analysis')
+    elif current_section == 'strategy':
+        if current_page == 'equity_analysis':
+            breadcrumbs.append('📈 Equity Analysis')
+        elif current_page == 'strategy_editor':
+            breadcrumbs.append('⚙️ Strategy Editor')
+    elif current_section == 'system':
+        if current_page == 'system_status':
+            breadcrumbs.append('⚙️ System Status')
+    
+    return breadcrumbs
+
+# Display Breadcrumb Navigation
+breadcrumbs = generate_breadcrumbs()
+breadcrumb_text = " → ".join(breadcrumbs)
+st.markdown(f"<div style='font-size: 14px; color: #8e8ea0; margin-bottom: 10px; padding: 5px 0;'>{breadcrumb_text}</div>", 
+            unsafe_allow_html=True)
 
 # Page routing based on current_page
 if st.session_state.current_page == 'system':
@@ -1504,6 +1627,127 @@ elif st.session_state.current_page == 'pv_analysis':
                     st.markdown("ℹ️ *Top 3 stocks that contributed most to the last trading day's change*", help="Shows which positions had the biggest impact on the most recent day's portfolio change")
                     for contrib in daily_values_df.iloc[-1]['top_contributors']:
                         st.write(f"• {contrib['symbol']}: HK${contrib['contribution']:+,.0f} ({contrib['contribution_pct']:+.1f}%)")
+        
+        # Add Strategy Analysis Trigger Button
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🎯 Analyze Strategy Performance", type="primary", use_container_width=True):
+                # Store current analysis context for strategy analysis
+                st.session_state.navigation['context']['source_analysis'] = analysis
+                st.session_state.current_page = 'equity_analysis'
+                st.session_state.navigation['section'] = 'strategy'
+                st.session_state.navigation['page'] = 'equity_analysis'
+                st.success("🚀 Launching Equity Strategy Analysis...")
+                st.rerun()
+
+# Strategy Analysis Dashboard Pages (New)
+elif st.session_state.current_page == 'equity_analysis':
+    # Equity Strategy Analysis Dashboard
+    st.subheader("📈 Equity Strategy Analysis")
+    
+    # Placeholder content for Equity Strategy Analysis
+    st.info("🚧 **Coming Soon!** Equity Strategy Analysis Dashboard")
+    st.markdown("""
+    **Planned Features:**
+    - Portfolio performance comparison across different strategies
+    - Risk-adjusted return metrics and analysis
+    - Strategy effectiveness scoring and recommendations
+    - Equity-specific performance attribution
+    - Benchmark comparison and relative performance tracking
+    """)
+    
+    # Navigation back to Portfolio Analysis
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col1:
+        if st.button("🔙 Back to Portfolios", type="secondary"):
+            st.session_state.current_page = 'overview'
+            st.session_state.navigation['section'] = 'portfolios'
+            st.session_state.navigation['page'] = 'overview'
+            st.rerun()
+    
+    with col2:
+        st.markdown("*This dashboard will be triggered from Portfolio Value Analysis*")
+    
+    with col3:
+        if st.button("📊 Go to PV Analysis", type="primary"):
+            st.session_state.current_page = 'pv_analysis'
+            st.session_state.navigation['section'] = 'portfolios'
+            st.session_state.navigation['page'] = 'pv_analysis'
+            st.rerun()
+
+elif st.session_state.current_page == 'strategy_editor':
+    # Strategy Editor Dashboard
+    st.subheader("⚙️ Strategy Editor")
+    
+    # Placeholder content for Strategy Editor
+    st.info("🚧 **Coming Soon!** Strategy Editor Dashboard")
+    st.markdown("""
+    **Planned Features:**
+    - Interactive strategy parameter editing interface
+    - Strategy backtesting and simulation tools
+    - Risk parameter configuration and validation
+    - Strategy template library and management
+    - Performance impact preview and analysis
+    """)
+    
+    # Mock strategy editing interface
+    with st.expander("📋 Preview: Strategy Configuration", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.selectbox("Strategy Template:", ["HK Growth", "Dividend Focus", "Value Investing", "Momentum", "Custom"], disabled=True)
+            st.slider("Risk Tolerance:", 1, 10, 5, disabled=True)
+            st.number_input("Max Position Size (%):", 1, 25, 10, disabled=True)
+        
+        with col2:
+            st.selectbox("Rebalancing Frequency:", ["Daily", "Weekly", "Monthly", "Quarterly"], index=2, disabled=True)
+            st.checkbox("Enable Stop Loss", disabled=True)
+            st.checkbox("Enable Take Profit", disabled=True)
+    
+    # Navigation
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("🔙 Back to Strategy Section", type="secondary"):
+            st.session_state.current_page = 'equity_analysis'
+            st.rerun()
+    with col2:
+        if st.button("📊 View Portfolios", type="primary"):
+            st.session_state.current_page = 'overview'
+            st.session_state.navigation['section'] = 'portfolios'
+            st.session_state.navigation['page'] = 'overview'
+            st.rerun()
+
+elif st.session_state.current_page == 'strategy_comparison':
+    # Strategy Comparison Dashboard  
+    st.subheader("📊 Strategy Comparison")
+    
+    # Placeholder content for Strategy Comparison
+    st.info("🚧 **Coming Soon!** Strategy Comparison Dashboard")
+    st.markdown("""
+    **Planned Features:**
+    - Side-by-side strategy performance comparison
+    - Multi-period analysis and performance attribution
+    - Risk-return profile visualization and analysis
+    - Statistical significance testing of strategy differences
+    - Best practice recommendations based on comparison results
+    """)
+    
+    # Mock comparison interface
+    with st.expander("📊 Preview: Strategy Comparison", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.selectbox("Strategy A:", ["Current HK Strategy", "Conservative Growth", "Aggressive Growth"], disabled=True)
+        with col2:
+            st.selectbox("Strategy B:", ["Market Index", "Peer Average", "Custom Strategy"], disabled=True)
+        with col3:
+            st.selectbox("Comparison Period:", ["1 Month", "3 Months", "6 Months", "1 Year"], disabled=True)
+        
+        st.markdown("*Comparison charts and metrics would appear here*")
+    
+    # Navigation
+    if st.button("🔙 Back to Strategy Analysis", type="secondary"):
+        st.session_state.current_page = 'equity_analysis'
+        st.rerun()
 
 elif st.session_state.current_page == 'overview':
     # All Portfolios Overview Page
