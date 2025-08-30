@@ -27,6 +27,352 @@ except ImportError:
     from analysis_manager import AnalysisManager
     from hkex_calendar import validate_hkex_analysis_period, hkex_calendar
 
+@st.dialog("Copy Portfolio")
+def copy_portfolio_dialog(portfolio_id: str):
+    """Modal dialog for copying a portfolio with proper UI"""
+    original_portfolio = st.session_state.portfolios[portfolio_id]
+    
+    st.markdown(f"**Create a copy of: {original_portfolio['name']}**")
+    st.markdown("---")
+    
+    # Generate default new ID
+    default_new_id = f"{portfolio_id}_Copy"
+    counter = 1
+    while default_new_id in st.session_state.portfolios:
+        default_new_id = f"{portfolio_id}_Copy{counter}"
+        counter += 1
+    
+    # Form inputs with better spacing
+    col1, col2 = st.columns(2)
+    with col1:
+        new_portfolio_id = st.text_input(
+            "Portfolio ID:", 
+            value=default_new_id,
+            help="Unique identifier for the new portfolio"
+        )
+    with col2:
+        new_portfolio_name = st.text_input(
+            "Portfolio Name:",
+            value=f"Copy of {original_portfolio['name']}",
+            help="Display name for the new portfolio"
+        )
+    
+    new_portfolio_desc = st.text_area(
+        "Description (Optional):",
+        value=f"Copy of {original_portfolio['description']}",
+        height=100,
+        help="Optional description for the new portfolio"
+    )
+    
+    # Validation
+    error_msg = ""
+    if not new_portfolio_id.strip():
+        error_msg = "Portfolio ID is required"
+    elif new_portfolio_id.strip() in st.session_state.portfolios:
+        error_msg = f"Portfolio ID '{new_portfolio_id.strip()}' already exists"
+    elif not new_portfolio_name.strip():
+        error_msg = "Portfolio Name is required"
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+    
+    st.markdown("---")
+    
+    # Action buttons with better spacing
+    col_btn1, col_btn2, col_spacer = st.columns([1, 1, 2])
+    
+    with col_btn1:
+        if st.button("📋 Create Copy", disabled=bool(error_msg), use_container_width=True, type="primary"):
+            # Use the proper copy_portfolio method
+            success = st.session_state.portfolio_manager.copy_portfolio(
+                portfolio_id,
+                new_portfolio_id.strip(),
+                new_portfolio_name.strip(),
+                new_portfolio_desc.strip()
+            )
+            
+            if success:
+                # Refresh portfolios and enter edit mode for the new copy
+                st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                st.session_state.current_page = 'portfolio'
+                # Use portfolio_switch_request to properly select the new portfolio
+                st.session_state.portfolio_switch_request = new_portfolio_id.strip()
+                st.session_state.edit_mode[new_portfolio_id.strip()] = True
+                st.session_state.portfolio_backup[new_portfolio_id.strip()] = copy.deepcopy(st.session_state.portfolios[new_portfolio_id.strip()])
+                # Update navigation state for unified navigation system
+                st.session_state.navigation['section'] = 'portfolios'
+                st.session_state.navigation['page'] = 'portfolio'
+                st.success(f"📋 Successfully created copy: {new_portfolio_id.strip()}")
+                st.rerun()
+            else:
+                st.error(f"❌ Failed to create copy of {portfolio_id}")
+    
+    with col_btn2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.rerun()
+
+@st.dialog("Add New Symbol")
+def add_symbol_dialog(portfolio_id: str):
+    """Modal dialog for adding a new symbol to the portfolio"""
+    st.markdown("**Add a new stock position to your portfolio**")
+    st.markdown("---")
+    
+    # Symbol input with validation
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        symbol_input = st.text_input(
+            "Stock Symbol:", 
+            placeholder="e.g., 0001.HK, 0700.HK",
+            help="Enter Hong Kong stock symbol"
+        )
+    with col2:
+        if st.button("🔍 Check Symbol", use_container_width=True):
+            if symbol_input.strip():
+                trimmed_symbol = symbol_input.strip().upper()
+                # Try to get company info from Yahoo Finance
+                try:
+                    stock = yf.Ticker(trimmed_symbol)
+                    info = stock.info
+                    if info and len(info) > 1:
+                        company_name = info.get('longName', info.get('shortName', 'Unknown Company'))
+                        # Try to determine sector
+                        sector = info.get('sector', 'Other')
+                        if sector in ["Technology", "Information Technology"]:
+                            sector = "Tech"
+                        elif sector in ["Financials", "Financial Services"]:
+                            sector = "Financials"
+                        elif sector in ["Real Estate"]:
+                            sector = "REIT"
+                        elif sector in ["Energy"]:
+                            sector = "Energy"
+                        else:
+                            sector = "Other"
+                        
+                        # Store in session state for display
+                        st.session_state['validated_symbol'] = trimmed_symbol
+                        st.session_state['validated_company'] = company_name
+                        st.session_state['validated_sector'] = sector
+                        st.success(f"✅ Found: {company_name}")
+                        st.rerun()
+                    else:
+                        st.error("❌ Symbol not found on Yahoo Finance")
+                except Exception as e:
+                    st.error(f"❌ Error validating symbol: {str(e)}")
+            else:
+                st.error("Please enter a symbol")
+    
+    # Display validated information
+    validated_symbol = st.session_state.get('validated_symbol', '')
+    validated_company = st.session_state.get('validated_company', '')
+    validated_sector = st.session_state.get('validated_sector', 'Other')
+    
+    # Show validated info if available
+    if validated_symbol:
+        st.success(f"**Validated Symbol**: {validated_symbol}")
+        st.info(f"**Company**: {validated_company}")
+        st.info(f"**Sector**: {validated_sector}")
+    
+    st.markdown("---")
+    
+    # Quantity and Cost inputs
+    col_qty, col_cost = st.columns(2)
+    with col_qty:
+        quantity = st.number_input(
+            "Quantity:",
+            min_value=1,
+            value=100,
+            step=1,
+            format="%d",
+            help="Number of shares"
+        )
+    with col_cost:
+        avg_cost = st.number_input(
+            "Average Cost (HK$):",
+            min_value=0.01,
+            value=50.0,
+            step=0.01,
+            format="%.2f",
+            help="Average cost per share in HK$"
+        )
+    
+    # Validation
+    error_msg = ""
+    if not validated_symbol:
+        error_msg = "Please check the symbol first"
+    elif not isinstance(quantity, int) or quantity <= 0:
+        error_msg = "Quantity must be a positive integer"
+    elif not isinstance(avg_cost, (int, float)) or avg_cost <= 0:
+        error_msg = "Average cost must be a positive number"
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+    
+    st.markdown("---")
+    
+    # Action buttons
+    col_add, col_cancel, col_spacer = st.columns([1, 1, 2])
+    
+    with col_add:
+        if st.button("➕ Add Position", disabled=bool(error_msg), use_container_width=True, type="primary"):
+            # Add to session state pending changes
+            modified_key = f'modified_positions_{portfolio_id}'
+            if modified_key not in st.session_state:
+                st.session_state[modified_key] = {}
+            
+            # Add new position to modified positions
+            st.session_state[modified_key][validated_symbol] = {
+                'symbol': validated_symbol,
+                'company_name': validated_company,
+                'quantity': quantity,
+                'avg_cost': avg_cost,
+                'sector': validated_sector
+            }
+            
+            # Also add to current portfolio for immediate display
+            if validated_symbol not in [pos['symbol'] for pos in st.session_state.portfolios[portfolio_id]['positions']]:
+                st.session_state.portfolios[portfolio_id]['positions'].append({
+                    'symbol': validated_symbol,
+                    'company_name': validated_company,
+                    'quantity': quantity,
+                    'avg_cost': avg_cost,
+                    'sector': validated_sector
+                })
+            else:
+                # Update existing position
+                for i, pos in enumerate(st.session_state.portfolios[portfolio_id]['positions']):
+                    if pos['symbol'] == validated_symbol:
+                        st.session_state.portfolios[portfolio_id]['positions'][i] = {
+                            'symbol': validated_symbol,
+                            'company_name': validated_company,
+                            'quantity': quantity,
+                            'avg_cost': avg_cost,
+                            'sector': validated_sector
+                        }
+                        break
+            
+            # Clear validation session state
+            for key in ['validated_symbol', 'validated_company', 'validated_sector']:
+                if key in st.session_state:
+                    del st.session_state[key]
+                    
+            st.success(f"✅ {validated_symbol} added to portfolio!")
+            st.rerun()
+    
+    with col_cancel:
+        if st.button("❌ Cancel", use_container_width=True):
+            # Clear validation session state
+            for key in ['validated_symbol', 'validated_company', 'validated_sector']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+
+@st.dialog("Update Position")
+def update_position_dialog(portfolio_id: str, position: dict):
+    """Modal dialog for updating an existing position"""
+    st.markdown(f"**Update Position: {position['symbol']}**")
+    st.markdown("---")
+    
+    # Display read-only position info
+    col_info1, col_info2 = st.columns(2)
+    with col_info1:
+        st.text_input("Symbol:", value=position['symbol'], disabled=True)
+        st.text_input("Company:", value=position['company_name'], disabled=True)
+    with col_info2:
+        st.text_input("Sector:", value=position.get('sector', 'Other'), disabled=True)
+    
+    st.markdown("---")
+    st.markdown("**Update the following information:**")
+    
+    # Editable fields
+    col_qty, col_cost = st.columns(2)
+    with col_qty:
+        new_quantity = st.number_input(
+            "Quantity:",
+            min_value=0,
+            value=position['quantity'],
+            step=1,
+            format="%d",
+            help="Number of shares (0 to remove position)"
+        )
+    with col_cost:
+        new_avg_cost = st.number_input(
+            "Average Cost (HK$):",
+            min_value=0.01,
+            value=position['avg_cost'],
+            step=0.01,
+            format="%.2f",
+            help="Average cost per share in HK$"
+        )
+    
+    # Validation
+    error_msg = ""
+    if not isinstance(new_quantity, int) or new_quantity < 0:
+        error_msg = "Quantity must be a non-negative integer"
+    elif new_quantity > 0 and (not isinstance(new_avg_cost, (int, float)) or new_avg_cost <= 0):
+        error_msg = "Average cost must be a positive number when quantity > 0"
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+    
+    st.markdown("---")
+    
+    # Action buttons
+    col_update, col_cancel, col_spacer = st.columns([1, 1, 2])
+    
+    with col_update:
+        if st.button("💾 Update", disabled=bool(error_msg), use_container_width=True, type="primary"):
+            # Update in session state
+            modified_key = f'modified_positions_{portfolio_id}'
+            deleted_key = f'deleted_positions_{portfolio_id}'
+            
+            if modified_key not in st.session_state:
+                st.session_state[modified_key] = {}
+            if deleted_key not in st.session_state:
+                st.session_state[deleted_key] = set()
+            
+            if new_quantity == 0:
+                # Mark for deletion
+                st.session_state[deleted_key].add(position['symbol'])
+                # Remove from modified if it was there
+                if position['symbol'] in st.session_state[modified_key]:
+                    del st.session_state[modified_key][position['symbol']]
+            else:
+                # Update position
+                st.session_state[modified_key][position['symbol']] = {
+                    'symbol': position['symbol'],
+                    'company_name': position['company_name'],
+                    'quantity': new_quantity,
+                    'avg_cost': new_avg_cost,
+                    'sector': position.get('sector', 'Other')
+                }
+                # Remove from deleted if it was there
+                if position['symbol'] in st.session_state[deleted_key]:
+                    st.session_state[deleted_key].remove(position['symbol'])
+            
+            # Update display data immediately
+            for i, pos in enumerate(st.session_state.portfolios[portfolio_id]['positions']):
+                if pos['symbol'] == position['symbol']:
+                    if new_quantity == 0:
+                        # Don't remove from display, just mark as deleted for visual indication
+                        pass
+                    else:
+                        st.session_state.portfolios[portfolio_id]['positions'][i] = {
+                            'symbol': position['symbol'],
+                            'company_name': position['company_name'],
+                            'quantity': new_quantity,
+                            'avg_cost': new_avg_cost,
+                            'sector': position.get('sector', 'Other')
+                        }
+                    break
+            
+            action = "marked for deletion" if new_quantity == 0 else "updated"
+            st.success(f"✅ {position['symbol']} {action}!")
+            st.rerun()
+    
+    with col_cancel:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.rerun()
+
 st.set_page_config(
     page_title="HK Strategy Multi-Portfolio Dashboard",
     page_icon="📈",
@@ -81,6 +427,10 @@ if 'pending_changes' not in st.session_state:
 
 if 'portfolio_switch_request' not in st.session_state:
     st.session_state.portfolio_switch_request = None
+
+# Track the actual current portfolio selection (not just default)
+if 'current_portfolio_selection' not in st.session_state:
+    st.session_state.current_portfolio_selection = None
 
 if 'last_save_status' not in st.session_state:
     st.session_state.last_save_status = {}
@@ -638,17 +988,39 @@ portfolio_keys = list(st.session_state.portfolios.keys())
 if st.session_state.portfolio_switch_request:
     requested_portfolio = st.session_state.portfolio_switch_request
     if requested_portfolio in portfolio_keys:
-        # Update the default selected portfolio
+        # Get actual current selection from session state, not hardcoded first portfolio
+        current_selected = st.session_state.current_portfolio_selection
+        if not current_selected or current_selected not in portfolio_keys:
+            current_selected = portfolio_keys[0] if portfolio_keys else None
+            
+        was_editing = False
+        if current_selected and current_selected in st.session_state.edit_mode:
+            was_editing = st.session_state.edit_mode[current_selected]
+        
+        # Update the selected portfolio and store in session state
         selected_portfolio = requested_portfolio
+        st.session_state.current_portfolio_selection = requested_portfolio
+        
+        # Preserve edit mode if switching to same portfolio (could be a rerun from edit action)
+        if requested_portfolio == current_selected and was_editing:
+            if requested_portfolio not in st.session_state.edit_mode:
+                st.session_state.edit_mode[requested_portfolio] = True
+        
         # Clear the request
         st.session_state.portfolio_switch_request = None
     else:
-        # Invalid portfolio requested, clear request
+        # Invalid portfolio requested, clear request and use current selection
         st.session_state.portfolio_switch_request = None
-        selected_portfolio = portfolio_keys[0] if portfolio_keys else None
+        selected_portfolio = st.session_state.current_portfolio_selection
+        if not selected_portfolio or selected_portfolio not in portfolio_keys:
+            selected_portfolio = portfolio_keys[0] if portfolio_keys else None
+            st.session_state.current_portfolio_selection = selected_portfolio
 else:
-    # Initialize default values for portfolio-specific variables
-    selected_portfolio = portfolio_keys[0] if portfolio_keys else None
+    # Initialize from session state or use first portfolio as fallback
+    selected_portfolio = st.session_state.current_portfolio_selection
+    if not selected_portfolio or selected_portfolio not in portfolio_keys:
+        selected_portfolio = portfolio_keys[0] if portfolio_keys else None
+        st.session_state.current_portfolio_selection = selected_portfolio
 
 is_editing = False
 current_portfolio = None
@@ -667,8 +1039,20 @@ if st.session_state.current_page == 'portfolio' and selected_portfolio:
         key="portfolio_selector_early"
     )
     
+    # Store the actual user selection in session state
+    st.session_state.current_portfolio_selection = selected_portfolio
+    
     if selected_portfolio:
         current_portfolio = st.session_state.portfolios[selected_portfolio]
+        
+        # Initialize session state for table editing early to prevent race conditions
+        if f'edit_mode_{selected_portfolio}' not in st.session_state:
+            st.session_state[f'edit_mode_{selected_portfolio}'] = {}
+        if f'deleted_positions_{selected_portfolio}' not in st.session_state:
+            st.session_state[f'deleted_positions_{selected_portfolio}'] = set()
+        if f'modified_positions_{selected_portfolio}' not in st.session_state:
+            st.session_state[f'modified_positions_{selected_portfolio}'] = {}
+            
         is_editing = st.session_state.edit_mode.get(selected_portfolio, False)
 
 # Quick copy button for current portfolio
@@ -876,17 +1260,6 @@ if False:  # Disabled - using database integration above
         else:
             st.sidebar.error("❌ Invalid portfolio ID or already exists")
 
-# System Status Button at bottom of sidebar
-st.sidebar.markdown("---")
-col1, col2 = st.sidebar.columns([1, 1])
-with col1:
-    if st.button("📊 Portfolio", use_container_width=True):
-        st.session_state.current_page = 'portfolio'
-        st.rerun()
-with col2:
-    if st.button("⚙️ System", use_container_width=True):
-        st.session_state.current_page = 'system'
-        st.rerun()
 
 # Breadcrumb Navigation Function
 def generate_breadcrumbs():
@@ -1106,13 +1479,13 @@ curl -I https://finance.yahoo.com
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Portfolios", total_portfolios)
+        st.metric("Total Portfolios", total_portfolios, help="Number of portfolios in your system")
     with col2:
-        st.metric("Total Positions", total_positions)
+        st.metric("Total Positions", total_positions, help="Total number of stock positions across all portfolios (includes positions with quantity = 0)")
     with col3:
-        st.metric("Active Positions", active_positions)
+        st.metric("Active Positions", active_positions, help="Number of positions with quantity > 0 (stocks you currently hold)")
     with col4:
-        st.metric("Cached Prices", len(st.session_state.portfolio_prices))
+        st.metric("Cached Prices", len(st.session_state.portfolio_prices), help="Number of portfolios with cached price data")
     
     # Recent Activity
     st.markdown("---")
@@ -1755,16 +2128,56 @@ elif st.session_state.current_page == 'overview':
     
     # Portfolio Statistics
     total_portfolios = len(st.session_state.portfolios)
-    total_positions = sum(len(p['positions']) for p in st.session_state.portfolios.values())
-    active_positions = sum(len([pos for pos in p['positions'] if pos['quantity'] > 0]) for p in st.session_state.portfolios.values())
+    
+    # Debug breakdown of position counting
+    debug_info = []
+    all_positions_count = 0
+    active_positions_count = 0
+    inactive_positions_count = 0
+    
+    for portfolio_id, portfolio_data in st.session_state.portfolios.items():
+        portfolio_total = len(portfolio_data['positions'])
+        portfolio_active = len([pos for pos in portfolio_data['positions'] if pos['quantity'] > 0])
+        portfolio_inactive = portfolio_total - portfolio_active
+        
+        debug_info.append(f"{portfolio_id}: {portfolio_total} total ({portfolio_active} active, {portfolio_inactive} inactive)")
+        all_positions_count += portfolio_total
+        active_positions_count += portfolio_active
+        inactive_positions_count += portfolio_inactive
+    
+    total_positions = all_positions_count
+    active_positions = active_positions_count
+    
+    # Show debug info in an expander for troubleshooting
+    with st.expander("📊 Position Count Breakdown (Debug)", expanded=False):
+        st.write("**Detailed position breakdown by portfolio:**")
+        for info in debug_info:
+            st.write(f"- {info}")
+        st.write(f"**Summary:**")
+        st.write(f"- Total Position Entries: {all_positions_count}")
+        st.write(f"- Active Positions: {active_positions_count}")
+        st.write(f"- Inactive Positions (qty=0): {inactive_positions_count}")
+        
+        # Check for unique symbols across all portfolios
+        all_symbols = set()
+        for p in st.session_state.portfolios.values():
+            for pos in p['positions']:
+                all_symbols.add(pos['symbol'])
+        st.write(f"- Unique Symbols Across All Portfolios: {len(all_symbols)}")
+        
+        st.markdown("---")
+        st.write("**Expected vs Actual:**")
+        st.write(f"- You mentioned 3 portfolios × 33 positions = 99 expected")
+        st.write(f"- Actual calculation shows: {all_positions_count} total positions")
+        st.write(f"- This suggests some positions have quantity = 0 or there are fewer positions than expected")
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Total Portfolios", total_portfolios)
+        st.metric("Total Portfolios", total_portfolios, help="Number of portfolios in your system")
     with col2:
-        st.metric("Total Positions", total_positions)
+        st.metric("Total Positions", total_positions, help="Total number of stock positions across all portfolios (includes positions with quantity = 0)")
     with col3:
-        st.metric("Active Positions", active_positions)
+        st.metric("Active Positions", active_positions, help="Number of positions with quantity > 0 (stocks you currently hold)")
     
     st.markdown("---")
     
@@ -1812,90 +2225,194 @@ elif st.session_state.current_page == 'overview':
         })
     
     if overview_data:
-        overview_df = pd.DataFrame(overview_data)
-        st.dataframe(overview_df, use_container_width=True, hide_index=True)
+        # Enhanced Interactive Table with Action Buttons
+        st.markdown("### 📋 Interactive Portfolio Table")
         
-        # Portfolio Actions
+        # CSS styling for clickable portfolio names
+        st.markdown("""
+        <style>
+        div[data-testid="column"] > div[data-testid="stButton"] > button[kind="secondary"] {
+            background: transparent !important;
+            border: none !important;
+            padding: 4px 8px !important;
+            color: #1f77b4 !important;
+            text-decoration: underline !important;
+            font-weight: normal !important;
+            text-align: left !important;
+            width: 100% !important;
+        }
+        div[data-testid="column"] > div[data-testid="stButton"] > button[kind="secondary"]:hover {
+            color: #0d5aa7 !important;
+            background-color: #f0f8ff !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Table header
+        header_cols = st.columns([1.5, 2, 2.5, 1, 1.5, 2, 2])
+        with header_cols[0]:
+            st.markdown("**Portfolio ID**")
+        with header_cols[1]:
+            st.markdown("**Name**")
+        with header_cols[2]:
+            st.markdown("**Description**")
+        with header_cols[3]:
+            st.markdown("**Positions**")
+        with header_cols[4]:
+            st.markdown("**Value**")
+        with header_cols[5]:
+            st.markdown("**Last Updated**")
+        with header_cols[6]:
+            st.markdown("**Actions**")
+        
+        st.markdown("---")
+        
+        # Table rows with action buttons
+        for i, portfolio_data in enumerate(overview_data):
+            portfolio_id = portfolio_data["Portfolio ID"]
+            
+            row_cols = st.columns([1.5, 2, 2.5, 1, 1.5, 2, 2])
+            
+            with row_cols[0]:
+                st.write(f"**{portfolio_data['Portfolio ID']}**")
+            with row_cols[1]:
+                # Clickable portfolio name that navigates to Portfolio Dashboard
+                if st.button(portfolio_data['Name'], 
+                           key=f"name_click_{portfolio_id}_{i}", 
+                           help=f"View {portfolio_id} dashboard",
+                           use_container_width=True,
+                           type="secondary"):
+                    # Navigate to Portfolio Dashboard in view mode (not edit)
+                    st.session_state.current_page = 'portfolio'
+                    # Use portfolio_switch_request to properly select the portfolio
+                    st.session_state.portfolio_switch_request = portfolio_id
+                    # Clear edit mode to ensure view mode
+                    if portfolio_id in st.session_state.edit_mode:
+                        st.session_state.edit_mode[portfolio_id] = False
+                    # Update navigation state for unified navigation system
+                    st.session_state.navigation['section'] = 'portfolios'
+                    st.session_state.navigation['page'] = 'portfolio'
+                    st.success(f"👁️ Viewing {portfolio_id} dashboard...")
+                    st.rerun()
+            with row_cols[2]:
+                st.write(portfolio_data['Description'])
+            with row_cols[3]:
+                st.write(portfolio_data['Positions'])
+            with row_cols[4]:
+                st.write(portfolio_data['Value'])
+            with row_cols[5]:
+                st.write(portfolio_data['Last Updated'])
+            with row_cols[6]:
+                # Action buttons for each portfolio
+                action_button_cols = st.columns(3)
+                
+                with action_button_cols[0]:
+                    if st.button("🔄", key=f"update_{portfolio_id}_{i}", help="Edit portfolio positions and details", use_container_width=True, type="primary"):
+                        # Navigate to Portfolio Dashboard in edit mode
+                        st.session_state.current_page = 'portfolio'
+                        # Use portfolio_switch_request to properly select the portfolio
+                        st.session_state.portfolio_switch_request = portfolio_id
+                        st.session_state.edit_mode[portfolio_id] = True
+                        st.session_state.portfolio_backup[portfolio_id] = copy.deepcopy(st.session_state.portfolios[portfolio_id])
+                        # Update navigation state for unified navigation system
+                        st.session_state.navigation['section'] = 'portfolios'
+                        st.session_state.navigation['page'] = 'portfolio'
+                        st.success(f"🔄 Opening {portfolio_id} for editing...")
+                        st.rerun()
+                
+                with action_button_cols[1]:
+                    if st.button("📋", key=f"copy_{portfolio_id}_{i}", help="Create a copy of this portfolio", use_container_width=True):
+                        copy_portfolio_dialog(portfolio_id)
+                
+                with action_button_cols[2]:
+                    # Handle delete confirmation state
+                    confirm_key = f"confirm_delete_{portfolio_id}"
+                    is_confirming = st.session_state.get(confirm_key, False)
+                    
+                    button_label = "⚠️" if is_confirming else "🗑️"
+                    button_type = "secondary" if not is_confirming else "primary"
+                    help_text = "Click again to confirm deletion" if is_confirming else "Delete this portfolio"
+                    
+                    if st.button(button_label, key=f"delete_{portfolio_id}_{i}", help=help_text, use_container_width=True, type=button_type):
+                        # Enhanced delete with confirmation
+                        if len(st.session_state.portfolios) > 1:
+                            if not is_confirming:
+                                st.session_state[confirm_key] = True
+                                st.warning(f"⚠️ Click the warning icon again to permanently delete '{portfolio_id}'")
+                                st.rerun()
+                            else:
+                                # Actually delete the portfolio
+                                success = st.session_state.portfolio_manager.delete_portfolio(portfolio_id)
+                                if success:
+                                    st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                                    st.success(f"✅ Portfolio '{portfolio_id}' deleted!")
+                                    # Clean up confirmation state
+                                    if confirm_key in st.session_state:
+                                        del st.session_state[confirm_key]
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ Failed to delete portfolio '{portfolio_id}'")
+                        else:
+                            st.error("❌ Cannot delete the only portfolio!")
+            
+            # Add separator between rows
+            if i < len(overview_data) - 1:
+                st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+        
+        # Simplified Portfolio Actions - Only Create New Portfolio
         st.markdown("---")
         st.subheader("🛠️ Portfolio Actions")
         
-        action_col1, action_col2, action_col3 = st.columns(3)
-        
-        with action_col1:
-            # View/Edit Portfolio
-            st.markdown("**📊 View/Edit Portfolio:**")
-            view_portfolio = st.selectbox(
-                "Select portfolio to view/edit:",
-                options=list(st.session_state.portfolios.keys()),
-                key="view_portfolio_select"
+        # Center the create portfolio form
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("**➕ Create New Portfolio**")
+            
+            new_portfolio_id = st.text_input(
+                "Portfolio ID:",
+                placeholder="e.g., TECH_GROWTH",
+                key="new_portfolio_id_overview",
+                help="Unique identifier for the portfolio"
             )
             
-            col_view, col_edit = st.columns(2)
-            with col_view:
-                if st.button("👁️ View", key="view_portfolio_btn"):
-                    st.session_state.current_page = 'portfolio'
-                    # Set the portfolio selector to the chosen portfolio
-                    st.rerun()
-            
-            with col_edit:
-                if st.button("✏️ Edit", key="edit_portfolio_btn"):
-                    st.session_state.current_page = 'portfolio'
-                    st.session_state.edit_mode[view_portfolio] = True
-                    st.session_state.portfolio_backup[view_portfolio] = copy.deepcopy(st.session_state.portfolios[view_portfolio])
-                    st.rerun()
-        
-        with action_col2:
-            # Delete Portfolio
-            st.markdown("**🗑️ Delete Portfolio:**")
-            delete_portfolio = st.selectbox(
-                "Select portfolio to delete:",
-                options=list(st.session_state.portfolios.keys()),
-                key="delete_portfolio_select"
+            new_portfolio_name = st.text_input(
+                "Portfolio Name:",
+                placeholder="e.g., Technology Growth Portfolio", 
+                key="new_portfolio_name_overview",
+                help="Descriptive name for the portfolio"
             )
             
-            if st.button("🗑️ Delete Portfolio", key="delete_portfolio_btn", type="secondary"):
-                if len(st.session_state.portfolios) > 1:  # Don't delete if only one portfolio
-                    # Show confirmation
-                    if f"confirm_delete_{delete_portfolio}" not in st.session_state:
-                        st.session_state[f"confirm_delete_{delete_portfolio}"] = False
-                    
-                    if not st.session_state[f"confirm_delete_{delete_portfolio}"]:
-                        st.session_state[f"confirm_delete_{delete_portfolio}"] = True
-                        st.warning(f"⚠️ Are you sure you want to delete '{delete_portfolio}'?")
-                        st.rerun()
-                    else:
-                        # Actually delete
-                        success = st.session_state.portfolio_manager.delete_portfolio(delete_portfolio)
-                        if success:
-                            st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
-                            st.success(f"✅ Portfolio '{delete_portfolio}' deleted!")
-                            del st.session_state[f"confirm_delete_{delete_portfolio}"]
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Failed to delete portfolio '{delete_portfolio}'")
-                else:
-                    st.error("❌ Cannot delete the only portfolio!")
-        
-        with action_col3:
-            # Create New Portfolio
-            st.markdown("**➕ Create New Portfolio:**")
-            new_portfolio_id = st.text_input("Portfolio ID:", key="new_portfolio_id_overview")
-            new_portfolio_name = st.text_input("Portfolio Name:", key="new_portfolio_name_overview")
-            new_portfolio_desc = st.text_area("Description:", key="new_portfolio_desc_overview")
+            new_portfolio_desc = st.text_area(
+                "Description:",
+                placeholder="Portfolio focused on technology growth stocks...",
+                key="new_portfolio_desc_overview",
+                help="Brief description of the portfolio strategy"
+            )
             
-            if st.button("➕ Create Portfolio", key="create_portfolio_overview_btn"):
+            if st.button("➕ Create Portfolio", key="create_portfolio_overview_btn", type="primary", use_container_width=True):
                 if new_portfolio_id and new_portfolio_name and new_portfolio_id not in st.session_state.portfolios:
                     success = st.session_state.portfolio_manager.create_portfolio(
                         new_portfolio_id, new_portfolio_name, new_portfolio_desc
                     )
                     if success:
                         st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
-                        st.success(f"✅ Portfolio '{new_portfolio_id}' created!")
+                        st.success(f"✅ Portfolio '{new_portfolio_id}' created successfully!")
+                        
+                        # Automatically switch to edit mode for the new portfolio
+                        st.session_state.current_page = 'portfolio'
+                        # Use portfolio_switch_request to properly select the new portfolio
+                        st.session_state.portfolio_switch_request = new_portfolio_id
+                        st.session_state.edit_mode[new_portfolio_id] = True
+                        st.session_state.portfolio_backup[new_portfolio_id] = copy.deepcopy(st.session_state.portfolios[new_portfolio_id])
+                        # Update navigation state for unified navigation system
+                        st.session_state.navigation['section'] = 'portfolios'
+                        st.session_state.navigation['page'] = 'portfolio'
+                        st.info("🔄 Redirecting to portfolio editor...")
                         st.rerun()
                     else:
                         st.error("❌ Failed to create portfolio!")
                 else:
-                    st.error("❌ Invalid portfolio ID or already exists!")
+                    st.error("❌ Please provide valid Portfolio ID and Name. Portfolio ID must be unique!")
     
     # Navigation hint
     st.markdown("---")
@@ -1930,138 +2447,272 @@ elif st.session_state.current_page == 'portfolio':
 
 # PORTFOLIO EDITING INTERFACE
 if is_editing:
-    st.markdown("### 📝 Edit Portfolio Positions")
+    # Debug information display
+    if 'debug_delete_action' in st.session_state:
+        with st.expander("🐛 Debug Info - Delete Action Analysis", expanded=False):
+            debug_data = st.session_state['debug_delete_action']
+            st.json(debug_data)
+            if st.button("Clear Debug"):
+                del st.session_state['debug_delete_action']
+                st.rerun()
     
-    # Add/Update Symbol Section
-    with st.expander("➕ Add/Update Symbol", expanded=True):
-        col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
-        
-        with col1:
-            new_symbol = st.text_input("Symbol:", placeholder="e.g., 0001.HK", key="new_symbol").upper()
-        with col2:
-            new_company = st.text_input("Company Name:", placeholder="Auto-fetch or enter manually", key="new_company")
-        with col3:
-            new_quantity = st.number_input("Quantity:", min_value=0, value=0, key="new_quantity")
-        with col4:
-            new_avg_cost = st.number_input("Avg Cost (HK$):", min_value=0.0, value=0.0, format="%.2f", key="new_avg_cost")
-        with col5:
-            new_sector = st.selectbox("Sector:", ["Tech", "Financials", "REIT", "Energy", "Other"], key="new_sector")
-        
-        col_btn1, col_btn2 = st.columns([1, 1])
-        with col_btn1:
-            if st.button("🔍 Auto-fetch Company Name"):
-                if new_symbol:
-                    company_name = get_company_name(new_symbol)
-                    st.session_state.new_company = company_name
-                    st.rerun()
-        
-        with col_btn2:
-            if st.button("➕ Add/Update Position"):
-                if new_symbol and new_quantity >= 0 and new_avg_cost >= 0:
-                    # Use portfolio manager for proper database update and isolation
-                    position_data = {
-                        "symbol": new_symbol,
-                        "company_name": new_company or get_company_name(new_symbol),
-                        "quantity": new_quantity,
-                        "avg_cost": new_avg_cost,
-                        "sector": new_sector
-                    }
-                    
-                    success = st.session_state.portfolio_manager.update_position(
-                        selected_portfolio, position_data
-                    )
-                    
-                    if success:
-                        # Reload portfolios from database to ensure isolation
-                        st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
-                        st.success(f"✅ Added/Updated {new_symbol} - Saved to database")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Failed to save {new_symbol} to database")
-                else:
-                    st.error("❌ Please fill in symbol, quantity (≥0), and avg cost (≥0)")
-
-    # Edit Existing Positions
+    # Add New Symbol button
+    col_add_btn, col_spacer = st.columns([2, 8])
+    with col_add_btn:
+        if st.button("➕ Add New Symbol", type="primary", use_container_width=True):
+            add_symbol_dialog(selected_portfolio)
+    
+    st.markdown("---")
+    
+    # Edit Existing Positions - Table Format
     st.markdown("### 📋 Current Positions (Click to Edit)")
     
     positions = st.session_state.portfolios[selected_portfolio]['positions']
     
-    for i, position in enumerate(positions):
-        with st.expander(f"📈 {position['symbol']} - {position['company_name'][:30]}... (Qty: {position['quantity']:,})", expanded=False):
-            col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    if not positions:
+        st.info("No positions in this portfolio. Add some positions above.")
+    else:
+        # Table header with custom CSS for better styling
+        st.markdown("""
+        <style>
+        .position-table {
+            margin-bottom: 20px;
+        }
+        .deleted-row {
+            background-color: rgba(255, 99, 71, 0.1);
+            color: #8B0000;
+        }
+        .modified-row {
+            background-color: rgba(255, 215, 0, 0.1);
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Create table structure
+        col_header = st.columns([1.5, 2, 1, 1, 1, 1.5])
+        col_header[0].markdown("**Ticker**")
+        col_header[1].markdown("**Stock Name**") 
+        col_header[2].markdown("**Quantity**")
+        col_header[3].markdown("**Avg Cost**")
+        col_header[4].markdown("**Sector**")
+        col_header[5].markdown("**Action**")
+        st.markdown("---")
+        
+        for i, position in enumerate(positions):
+            symbol = position['symbol']
+            edit_mode_key = f'edit_mode_{selected_portfolio}'
+            deleted_key = f'deleted_positions_{selected_portfolio}'
+            modified_key = f'modified_positions_{selected_portfolio}'
             
-            with col1:
-                edit_company = st.text_input("Company Name:", value=position['company_name'], key=f"edit_company_{i}")
-            with col2:
-                edit_quantity = st.number_input("Quantity:", min_value=0, value=position['quantity'], key=f"edit_quantity_{i}")
-            with col3:
-                edit_avg_cost = st.number_input("Avg Cost (HK$):", min_value=0.0, value=position['avg_cost'], format="%.2f", key=f"edit_avg_cost_{i}")
-            with col4:
-                edit_sector = st.selectbox("Sector:", ["Tech", "Financials", "REIT", "Energy", "Other"], 
-                                         index=["Tech", "Financials", "REIT", "Energy", "Other"].index(position.get('sector', 'Other')),
-                                         key=f"edit_sector_{i}")
+            is_deleted = symbol in st.session_state[deleted_key]
+            is_editing = st.session_state[edit_mode_key].get(symbol, False)
+            is_modified = symbol in st.session_state[modified_key]
             
-            col_update, col_remove = st.columns([1, 1])
-            with col_update:
-                if st.button(f"💾 Update {position['symbol']}", key=f"update_{i}"):
-                    # Add to pending changes instead of immediate database update
-                    if selected_portfolio not in st.session_state.pending_changes:
-                        st.session_state.pending_changes[selected_portfolio] = []
-                    
-                    position_data = {
-                        "symbol": position['symbol'],
-                        "company_name": edit_company,
-                        "quantity": edit_quantity,
-                        "avg_cost": edit_avg_cost,
-                        "sector": edit_sector
-                    }
-                    
-                    # Remove any existing change for this symbol
-                    st.session_state.pending_changes[selected_portfolio] = [
-                        change for change in st.session_state.pending_changes[selected_portfolio]
-                        if not (change.get('action') == 'update_position' and change.get('data', {}).get('symbol') == position['symbol'])
-                    ]
-                    
-                    # Add new change
-                    st.session_state.pending_changes[selected_portfolio].append({
-                        'action': 'update_position',
-                        'data': position_data
-                    })
-                    
-                    # Update display data immediately (but not database)
-                    st.session_state.portfolios[selected_portfolio]['positions'][i] = position_data
-                    
-                    st.success(f"✅ {position['symbol']} updated (click Save to persist)")
-                    st.info("💡 Changes are pending - click 'Save' to apply to database")
-                    st.rerun()
+            # Apply styling based on state
+            if is_deleted:
+                st.markdown('<div class="deleted-row">', unsafe_allow_html=True)
+            elif is_modified:
+                st.markdown('<div class="modified-row">', unsafe_allow_html=True)
             
-            with col_remove:
-                if st.button(f"🗑️ Remove {position['symbol']}", key=f"remove_{i}"):
-                    # Add to pending changes instead of immediate database removal
-                    if selected_portfolio not in st.session_state.pending_changes:
-                        st.session_state.pending_changes[selected_portfolio] = []
-                    
-                    # Remove any existing changes for this symbol
-                    st.session_state.pending_changes[selected_portfolio] = [
-                        change for change in st.session_state.pending_changes[selected_portfolio]
-                        if not (change.get('data', {}).get('symbol') == position['symbol'] or change.get('symbol') == position['symbol'])
-                    ]
-                    
-                    # Add removal to pending changes
-                    st.session_state.pending_changes[selected_portfolio].append({
-                        'action': 'remove_position',
-                        'symbol': position['symbol']
-                    })
-                    
-                    # Update display data immediately (but not database)
-                    st.session_state.portfolios[selected_portfolio]['positions'] = [
-                        pos for pos in st.session_state.portfolios[selected_portfolio]['positions']
-                        if pos['symbol'] != position['symbol']
-                    ]
-                    
-                    st.success(f"✅ {position['symbol']} marked for removal (click Save to persist)")
-                    st.info("💡 Changes are pending - click 'Save' to apply to database")
-                    # Stay on editing page, don't jump away
+            col_data = st.columns([1.5, 2, 1, 1, 1, 1.5])
+            
+            with col_data[0]:
+                if is_deleted:
+                    st.markdown(f"~~{symbol}~~ 🗑️")
+                else:
+                    st.text(symbol)
+            
+            with col_data[1]:
+                if is_editing and not is_deleted:
+                    # Get current modified value or original
+                    current_company = st.session_state[modified_key].get(symbol, {}).get('company_name', position['company_name'])
+                    edit_company = st.text_input("", value=current_company, key=f"edit_company_{i}", label_visibility="collapsed")
+                else:
+                    company_display = position['company_name'][:25] + "..." if len(position['company_name']) > 25 else position['company_name']
+                    if is_deleted:
+                        st.markdown(f"~~{company_display}~~")
+                    else:
+                        st.text(company_display)
+            
+            with col_data[2]:
+                if is_editing and not is_deleted:
+                    current_qty = st.session_state[modified_key].get(symbol, {}).get('quantity', position['quantity'])
+                    edit_quantity = st.number_input("", min_value=0, value=current_qty, key=f"edit_quantity_{i}", step=1, format="%d", label_visibility="collapsed")
+                else:
+                    if is_deleted:
+                        st.markdown(f"~~{position['quantity']:,}~~")
+                    else:
+                        st.text(f"{position['quantity']:,}")
+            
+            with col_data[3]:
+                if is_editing and not is_deleted:
+                    current_cost = st.session_state[modified_key].get(symbol, {}).get('avg_cost', position['avg_cost'])
+                    edit_avg_cost = st.number_input("", min_value=0.0, value=current_cost, key=f"edit_avg_cost_{i}", format="%.2f", step=0.01, label_visibility="collapsed")
+                else:
+                    if is_deleted:
+                        st.markdown(f"~~HK${position['avg_cost']:.2f}~~")
+                    else:
+                        st.text(f"HK${position['avg_cost']:.2f}")
+            
+            with col_data[4]:
+                if is_editing and not is_deleted:
+                    current_sector = st.session_state[modified_key].get(symbol, {}).get('sector', position['sector'])
+                    sector_options = ["Tech", "Financials", "REIT", "Energy", "Other"]
+                    sector_index = sector_options.index(current_sector) if current_sector in sector_options else 4
+                    edit_sector = st.selectbox("", sector_options, index=sector_index, key=f"edit_sector_{i}", label_visibility="collapsed")
+                else:
+                    if is_deleted:
+                        st.markdown(f"~~{position.get('sector', 'Other')}~~")
+                    else:
+                        st.text(position.get('sector', 'Other'))
+            
+            with col_data[5]:
+                if is_deleted:
+                    if st.button("↩️ Restore", key=f"restore_{i}"):
+                        st.session_state[deleted_key].remove(symbol)
+                        st.rerun()
+                elif is_editing:
+                    col_save, col_cancel = st.columns(2)
+                    with col_save:
+                        if st.button("💾", key=f"save_{i}", help="Save changes"):
+                            # Save modifications to session state
+                            st.session_state[modified_key][symbol] = {
+                                'company_name': edit_company,
+                                'quantity': edit_quantity,
+                                'avg_cost': edit_avg_cost,
+                                'sector': edit_sector
+                            }
+                            st.session_state[edit_mode_key][symbol] = False
+                            st.success(f"✅ {symbol} changes saved (click Save All to commit)")
+                            st.rerun()
+                    with col_cancel:
+                        if st.button("❌", key=f"cancel_{i}", help="Cancel editing"):
+                            st.session_state[edit_mode_key][symbol] = False
+                            # Remove from modified if was there
+                            if symbol in st.session_state[modified_key]:
+                                del st.session_state[modified_key][symbol]
+                            st.rerun()
+                else:
+                    col_update, col_delete = st.columns(2)
+                    with col_update:
+                        if st.button("✏️", key=f"edit_{i}", help="Edit position"):
+                            update_position_dialog(selected_portfolio, position)
+                    with col_delete:
+                        if st.button("🗑️", key=f"delete_{i}", help="Mark for deletion"):
+                            # Debug information to track the issue
+                            debug_info = {
+                                'before_delete': {
+                                    'selected_portfolio': selected_portfolio,
+                                    'is_editing': is_editing,
+                                    'current_page': st.session_state.current_page,
+                                    'edit_mode_state': st.session_state.edit_mode.get(selected_portfolio, 'NOT_SET'),
+                                    'portfolio_switch_request': st.session_state.portfolio_switch_request
+                                }
+                            }
+                            
+                            # Store debug in session state temporarily
+                            st.session_state['debug_delete_action'] = debug_info
+                            
+                            # Perform the delete action
+                            st.session_state[deleted_key].add(symbol)
+                            st.info(f"📋 {symbol} marked for deletion")
+                            
+                            # Force preserve edit state before rerun
+                            st.session_state.edit_mode[selected_portfolio] = True
+                            st.session_state.current_page = 'portfolio'
+                            
+                            st.rerun()
+            
+            if is_deleted or is_modified:
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Add separator between rows
+            if i < len(positions) - 1:
+                st.markdown("<hr style='margin: 5px 0; border: 0.5px solid #ddd;'>", unsafe_allow_html=True)
+        
+        # Show status of pending changes
+        deleted_count = len(st.session_state[deleted_key])
+        modified_count = len(st.session_state[modified_key])
+        
+        if deleted_count > 0 or modified_count > 0:
+            st.markdown("---")
+            status_msg = []
+            if modified_count > 0:
+                status_msg.append(f"**{modified_count}** position(s) modified")
+            if deleted_count > 0:
+                status_msg.append(f"**{deleted_count}** position(s) marked for deletion")
+            
+            st.warning(f"⚠️ Pending changes: {', '.join(status_msg)}")
+        
+        # Table-level Save and Cancel buttons
+        st.markdown("---")
+        col_save_all, col_cancel_all = st.columns([1, 1])
+        
+        with col_save_all:
+            if st.button("💾 Save All Changes", type="primary", use_container_width=True):
+                # Show warning dialog
+                if deleted_count > 0 or modified_count > 0:
+                    if st.session_state.get('confirm_save', False):
+                        # Process all changes
+                        success = True
+                        
+                        # Apply modifications
+                        for symbol, changes in st.session_state[modified_key].items():
+                            position_data = {
+                                "symbol": symbol,
+                                "company_name": changes['company_name'],
+                                "quantity": changes['quantity'],
+                                "avg_cost": changes['avg_cost'],
+                                "sector": changes['sector']
+                            }
+                            
+                            if not st.session_state.portfolio_manager.update_position(selected_portfolio, position_data):
+                                success = False
+                                st.error(f"❌ Failed to update {symbol}")
+                        
+                        # Apply deletions
+                        for symbol in st.session_state[deleted_key]:
+                            if not st.session_state.portfolio_manager.remove_position(selected_portfolio, symbol):
+                                success = False
+                                st.error(f"❌ Failed to delete {symbol}")
+                        
+                        if success:
+                            # Clear session state
+                            st.session_state[modified_key].clear()
+                            st.session_state[deleted_key].clear()
+                            st.session_state[edit_mode_key].clear()
+                            
+                            # Reload portfolio data
+                            st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                            
+                            # Stay in editing mode - don't navigate away
+                            st.success("✅ All changes saved successfully to database!")
+                            st.rerun()
+                        
+                        st.session_state.confirm_save = False
+                    else:
+                        st.session_state.confirm_save = True
+                        st.warning("⚠️ This will permanently save all changes to the database. Click 'Save All Changes' again to confirm.")
+                        st.rerun()
+                else:
+                    st.info("💡 No changes to save")
+        
+        with col_cancel_all:
+            if st.button("🔙 Back", use_container_width=True):
+                # Clear all session state
+                st.session_state[modified_key].clear()
+                st.session_state[deleted_key].clear() 
+                st.session_state[edit_mode_key].clear()
+                
+                # Exit edit mode and return to All Portfolio Management (overview page)
+                st.session_state.edit_mode[selected_portfolio] = False
+                if selected_portfolio in st.session_state.portfolio_backup:
+                    del st.session_state.portfolio_backup[selected_portfolio]
+                st.session_state.current_page = 'overview'
+                st.session_state.navigation['section'] = 'portfolios'
+                st.session_state.navigation['page'] = 'overview'
+                st.success("🔙 Returning to All Portfolio Management...")
+                st.rerun()
 
 else:
     # NORMAL VIEWING MODE
@@ -2226,6 +2877,22 @@ else:
     
     with col1:
         if st.button(f"🔄 Get Real-time Data", type="primary"):
+            # DEBUG: Track portfolio state before real-time data fetch
+            debug_before_fetch = {
+                'selected_portfolio_before': selected_portfolio,
+                'current_portfolio_selection_before': st.session_state.current_portfolio_selection,
+                'current_page': st.session_state.current_page,
+                'portfolio_switch_request_before': st.session_state.portfolio_switch_request,
+                'portfolio_keys_order': portfolio_keys,
+                'expected_portfolio': selected_portfolio  # This should be what gets preserved
+            }
+            st.session_state['debug_realtime_fetch'] = debug_before_fetch
+            
+            # CRITICAL FIX: Use the actual current portfolio from session state
+            # This ensures we preserve the user's actual selection, not a fallback
+            actual_current_portfolio = st.session_state.current_portfolio_selection or selected_portfolio
+            st.session_state.portfolio_switch_request = actual_current_portfolio
+            
             if selected_portfolio not in st.session_state.portfolio_prices:
                 st.session_state.portfolio_prices[selected_portfolio] = {}
             if selected_portfolio not in st.session_state.fetch_details:
@@ -2302,6 +2969,17 @@ else:
                 logging.warning(f"Could not calculate previous day comparison: {e}")
                 st.session_state.prev_day_data = None
             
+            # DEBUG: Update debug info after fetch completion
+            if 'debug_realtime_fetch' in st.session_state:
+                st.session_state['debug_realtime_fetch']['selected_portfolio_after'] = selected_portfolio
+                st.session_state['debug_realtime_fetch']['current_portfolio_selection_after'] = st.session_state.current_portfolio_selection
+                st.session_state['debug_realtime_fetch']['portfolio_switch_request_after'] = st.session_state.portfolio_switch_request
+                st.session_state['debug_realtime_fetch']['fetch_completed'] = True
+                st.session_state['debug_realtime_fetch']['analysis'] = {
+                    'portfolio_preserved': st.session_state['debug_realtime_fetch']['expected_portfolio'] == selected_portfolio,
+                    'session_state_consistent': st.session_state.current_portfolio_selection == selected_portfolio
+                }
+            
             st.rerun()
     
     with col2:
@@ -2311,28 +2989,44 @@ else:
             st.caption("Using default prices")
     
     with col3:
-        # Portfolio selector dropdown (no automatic switching)
-        portfolio_options = list(st.session_state.portfolios.keys())
-        current_index = portfolio_options.index(selected_portfolio) if selected_portfolio in portfolio_options else 0
-        
-        new_portfolio = st.selectbox(
-            "Switch Portfolio:",
-            options=portfolio_options,
-            index=current_index,
-            key="realtime_portfolio_selector",
-            format_func=lambda x: f"{st.session_state.portfolios[x]['name'][:15]}..." if len(st.session_state.portfolios[x]['name']) > 15 else st.session_state.portfolios[x]['name']
-        )
+        # Display current portfolio (non-interactive to prevent conflicts)
+        current_portfolio_name = st.session_state.portfolios[selected_portfolio]['name']
+        if len(current_portfolio_name) > 20:
+            current_portfolio_name = current_portfolio_name[:20] + "..."
+        st.caption(f"Current: **{current_portfolio_name}**")
     
     with col4:
-        # Explicit switch button
-        if st.button("🔄 Switch", type="secondary"):
-            if new_portfolio != selected_portfolio:
-                st.session_state.portfolio_switch_request = new_portfolio
-                st.success(f"✅ Switching to {st.session_state.portfolios[new_portfolio]['name']}")
-                st.rerun()
-            else:
-                st.info("Same portfolio already selected")
+        # Show debug info if available
+        if 'debug_realtime_fetch' in st.session_state:
+            debug_data = st.session_state['debug_realtime_fetch']
+            if debug_data.get('fetch_completed', False):
+                if st.button("🐛 Debug", help="Show real-time fetch debug info"):
+                    st.json(debug_data)
+                    # Clear debug after showing
+                    if st.button("Clear Debug"):
+                        del st.session_state['debug_realtime_fetch']
+                        st.rerun()
     
+    
+    # Debug section for real-time fetch issues
+    if 'debug_realtime_fetch' in st.session_state:
+        with st.expander("🐛 Real-time Fetch Debug Info", expanded=False):
+            debug_data = st.session_state['debug_realtime_fetch']
+            st.json(debug_data)
+            
+            # Show analysis
+            if debug_data.get('fetch_completed', False):
+                before_portfolio = debug_data.get('selected_portfolio_before')
+                after_portfolio = debug_data.get('selected_portfolio_after')
+                
+                if before_portfolio == after_portfolio:
+                    st.success(f"✅ Portfolio stayed consistent: {before_portfolio}")
+                else:
+                    st.error(f"❌ Portfolio changed: {before_portfolio} → {after_portfolio}")
+            
+            if st.button("Clear Debug Info"):
+                del st.session_state['debug_realtime_fetch']
+                st.rerun()
     
     # Portfolio table - moved up for better visibility
     st.subheader(f"📋 {selected_portfolio} Holdings")
