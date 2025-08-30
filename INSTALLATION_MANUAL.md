@@ -380,8 +380,8 @@ SECRET_KEY=generate_a_random_secret_key_here
 # Activate virtual environment
 source venv/bin/activate
 
-# Start Streamlit dashboard
-streamlit run dashboard_editable.py --server.port 8501
+# Start unified multi-dashboard system
+python dashboard.py
 ```
 
 ### **Method 2: Using Startup Script**
@@ -418,14 +418,21 @@ sudo supervisorctl start hk_strategy
 1. **Open the dashboard:**
    - Navigate to: `http://localhost:8501`
 
-2. **Click System Status:**
-   - Click "⚙️ System" in the sidebar
+2. **Navigate to System Status:**
+   - Expand "🔧 SYSTEM & ADMIN" in the left navigation panel
+   - Click "⚙️ System Status"
    - Click "🔄 Refresh All Checks"
 
 3. **Verify all components are healthy:**
-   - ✅ PostgreSQL Database: Connected
-   - ✅ Redis Cache: Connected  
-   - ✅ Yahoo Finance API: Working
+   - ✅ PostgreSQL Database: Connected (with table count and connection details)
+   - ✅ Redis Cache: Connected (with memory usage and key count)
+   - ✅ Yahoo Finance API: Working (with test quote fetch)
+   - ✅ Portfolio Manager: Database integration working
+
+4. **Explore the Dashboard Sections:**
+   - **📊 PORTFOLIOS**: View portfolio overviews and detailed portfolio management
+   - **🎯 STRATEGY ANALYSIS**: Access equity strategy tools and signal generation
+   - **🔧 SYSTEM & ADMIN**: Monitor system health and configuration
 
 ### **Manual Verification:**
 
@@ -492,7 +499,7 @@ sudo netstat -tlnp | grep 8501
 sudo pkill -f streamlit
 
 # Or use a different port
-streamlit run dashboard_editable.py --server.port 8502
+python dashboard.py  # Note: port configuration is in the dashboard script
 ```
 
 ### **Log Files:**
