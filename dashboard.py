@@ -120,8 +120,11 @@ def add_symbol_dialog(portfolio_id: str):
     # Symbol input with validation
     col1, col2 = st.columns([2, 1])
     with col1:
+        # Use validated symbol as value if available, otherwise empty
+        current_symbol = st.session_state.get('validated_symbol', '')
         symbol_input = st.text_input(
             "Stock Symbol:", 
+            value=current_symbol,
             placeholder="e.g., 0001.HK, 0700.HK",
             help="Enter Hong Kong stock symbol"
         )
@@ -152,9 +155,10 @@ def add_symbol_dialog(portfolio_id: str):
                         st.session_state['validated_symbol'] = trimmed_symbol
                         st.session_state['validated_company'] = company_name
                         st.session_state['validated_sector'] = sector
+                        st.session_state['validation_success'] = True
                         st.success(f"✅ Found: {company_name}")
-                        st.rerun()
                     else:
+                        st.session_state['validation_success'] = False
                         st.error("❌ Symbol not found on Yahoo Finance")
                 except Exception as e:
                     st.error(f"❌ Error validating symbol: {str(e)}")
@@ -179,30 +183,30 @@ def add_symbol_dialog(portfolio_id: str):
     with col_qty:
         quantity = st.number_input(
             "Quantity:",
-            min_value=1,
+            min_value=0,
             value=100,
             step=1,
             format="%d",
-            help="Number of shares"
+            help="Number of shares (0 allowed for watchlist tracking)"
         )
     with col_cost:
         avg_cost = st.number_input(
             "Average Cost (HK$):",
-            min_value=0.01,
+            min_value=0.0,
             value=50.0,
             step=0.01,
             format="%.2f",
-            help="Average cost per share in HK$"
+            help="Average cost per share in HK$ (0 allowed for free shares)"
         )
     
     # Validation
     error_msg = ""
     if not validated_symbol:
         error_msg = "Please check the symbol first"
-    elif not isinstance(quantity, int) or quantity <= 0:
-        error_msg = "Quantity must be a positive integer"
-    elif not isinstance(avg_cost, (int, float)) or avg_cost <= 0:
-        error_msg = "Average cost must be a positive number"
+    elif not isinstance(quantity, int) or quantity < 0:
+        error_msg = "Quantity must be a non-negative integer"
+    elif not isinstance(avg_cost, (int, float)) or avg_cost < 0:
+        error_msg = "Average cost must be a non-negative number"
     
     if error_msg:
         st.error(f"❌ {error_msg}")
@@ -251,7 +255,7 @@ def add_symbol_dialog(portfolio_id: str):
                         break
             
             # Clear validation session state
-            for key in ['validated_symbol', 'validated_company', 'validated_sector']:
+            for key in ['validated_symbol', 'validated_company', 'validated_sector', 'validation_success']:
                 if key in st.session_state:
                     del st.session_state[key]
                     
@@ -261,7 +265,7 @@ def add_symbol_dialog(portfolio_id: str):
     with col_cancel:
         if st.button("❌ Cancel", use_container_width=True):
             # Clear validation session state
-            for key in ['validated_symbol', 'validated_company', 'validated_sector']:
+            for key in ['validated_symbol', 'validated_company', 'validated_sector', 'validation_success']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
@@ -297,19 +301,19 @@ def update_position_dialog(portfolio_id: str, position: dict):
     with col_cost:
         new_avg_cost = st.number_input(
             "Average Cost (HK$):",
-            min_value=0.01,
+            min_value=0.0,
             value=position['avg_cost'],
             step=0.01,
             format="%.2f",
-            help="Average cost per share in HK$"
+            help="Average cost per share in HK$ (0 allowed for free shares)"
         )
     
     # Validation
     error_msg = ""
     if not isinstance(new_quantity, int) or new_quantity < 0:
         error_msg = "Quantity must be a non-negative integer"
-    elif new_quantity > 0 and (not isinstance(new_avg_cost, (int, float)) or new_avg_cost <= 0):
-        error_msg = "Average cost must be a positive number when quantity > 0"
+    elif not isinstance(new_avg_cost, (int, float)) or new_avg_cost < 0:
+        error_msg = "Average cost must be a non-negative number"
     
     if error_msg:
         st.error(f"❌ {error_msg}")
@@ -378,6 +382,14 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
+
+# Helper function for safe percentage calculations
+def _safe_percentage(numerator, denominator):
+    """Safely calculate percentage to avoid divide by zero errors"""
+    try:
+        return (numerator / denominator * 100) if denominator != 0 else 0
+    except (ZeroDivisionError, TypeError):
+        return 0
 
 st.title("🏦 HK Strategy Dashboard")
 st.caption("Multi-portfolio HK stock tracking system")
@@ -2747,7 +2759,8 @@ else:
         market_value = current_price * position["quantity"]
         position_cost = position["avg_cost"] * position["quantity"]
         pnl = market_value - position_cost
-        pnl_pct = (pnl / position_cost * 100) if position_cost > 0 else 0
+        # Protect against divide by zero using helper function
+        pnl_pct = _safe_percentage(pnl, position_cost)
         
         total_value += market_value
         total_cost += position_cost
@@ -2770,7 +2783,8 @@ else:
     st.markdown(f"<h4 style='margin-bottom: 10px;'>💰 Portfolio Summary - {today_date}</h4>", unsafe_allow_html=True)
     
     total_pnl = total_value - total_cost
-    total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+    # Protect against divide by zero for total P&L percentage using helper function
+    total_pnl_pct = _safe_percentage(total_pnl, total_cost)
     
     # Custom CSS for smaller metrics
     st.markdown("""
@@ -2962,7 +2976,7 @@ else:
                     'prev_total_value': prev_total_value,
                     'current_total_value': current_total_value,
                     'daily_change': current_total_value - prev_total_value,
-                    'daily_change_pct': ((current_total_value - prev_total_value) / prev_total_value * 100) if prev_total_value > 0 else 0
+                    'daily_change_pct': _safe_percentage((current_total_value - prev_total_value), prev_total_value)
                 }
             except Exception as e:
                 import logging
