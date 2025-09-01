@@ -173,15 +173,20 @@ class ConfigManager:
     
     def get_redis_config(self) -> Dict[str, Any]:
         """Get Redis configuration as a dictionary."""
-        return {
+        config = {
             'host': self.get('redis.host', 'localhost'),
             'port': self.get('redis.port', 6379),
             'db': self.get('redis.database', 0),
-            'password': self.get('redis.password'),
             'socket_timeout': self.get('redis.socket_timeout', 5),
-            'connection_timeout': self.get('redis.connection_timeout', 10),
-            'max_connections': self.get('redis.max_connections', 50)
+            'socket_connect_timeout': self.get('redis.connection_timeout', 10)
         }
+        
+        # Only include password if it's not None/null
+        password = self.get('redis.password')
+        if password:
+            config['password'] = password
+            
+        return config
     
     def get_database_url(self) -> str:
         """Get database connection URL."""

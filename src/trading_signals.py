@@ -131,16 +131,21 @@ class TradingSignalGenerator:
 
     def _determine_signal_type(self, score: float) -> str:
         if score > 0.6:
-            return 'A'
+            return 'BMOM9'  # Strong Buy Momentum, strength 9
         elif score > 0.2:
-            return 'B' 
+            return 'BMOM7'  # Buy Momentum, strength 7
         elif score > -0.2:
-            return 'C'
+            return 'HMOM5'  # Hold Momentum, strength 5 
         else:
-            return 'D'
+            return 'SMOM3'  # Sell Momentum, strength 3
 
     def get_signal_description(self, signal_type: str) -> str:
         descriptions = {
+            'BMOM9': 'Strong Buy - High conviction bullish momentum signal',
+            'BMOM7': 'Buy - Moderate bullish momentum signal', 
+            'HMOM5': 'Hold - Neutral/weak momentum signal',
+            'SMOM3': 'Sell - Bearish momentum signal',
+            # Legacy support
             'A': 'Strong Buy - High conviction bullish signal',
             'B': 'Buy - Moderate bullish signal', 
             'C': 'Hold - Neutral/weak signal',
@@ -150,6 +155,11 @@ class TradingSignalGenerator:
 
     def get_signal_color(self, signal_type: str) -> str:
         colors = {
+            'BMOM9': '#00C851',  # Dark Green - Strong Buy
+            'BMOM7': '#33B679',  # Light Green - Buy 
+            'HMOM5': '#FFB300',  # Orange - Hold
+            'SMOM3': '#FF4444',  # Red - Sell
+            # Legacy support
             'A': '#00C851',  # Green
             'B': '#33B679',  # Light Green  
             'C': '#FFB300',  # Orange

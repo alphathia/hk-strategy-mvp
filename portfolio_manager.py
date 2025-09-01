@@ -21,7 +21,9 @@ class PortfolioManager:
         """Get database connection with retry"""
         try:
             if self._connection is None or self._connection.closed:
-                self._connection = psycopg2.connect(self.config.get_database_url())
+                db_url = self.config.get_database_url()
+                logger.debug(f"Attempting connection with config URL: {db_url}")
+                self._connection = psycopg2.connect(db_url)
             return self._connection
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
@@ -29,8 +31,10 @@ class PortfolioManager:
             import os
             db_password = os.getenv('DATABASE_PASSWORD', 'YOUR_PASSWORD')
             fallback_url = f"postgresql://trader:{db_password}@localhost:5432/hk_strategy"
+            logger.debug(f"Attempting fallback connection with URL: {fallback_url}")
             try:
                 self._connection = psycopg2.connect(fallback_url)
+                logger.info("Fallback connection successful")
                 return self._connection
             except Exception as e2:
                 logger.error(f"Fallback connection also failed: {e2}")
@@ -218,7 +222,13 @@ class PortfolioManager:
             # Get source portfolio
             all_portfolios = self.get_all_portfolios()
             if source_portfolio_id not in all_portfolios:
-                logger.error(f"Source portfolio {source_portfolio_id} not found")
+                available_portfolios = list(all_portfolios.keys())
+                logger.error(f"Source portfolio '{source_portfolio_id}' not found. Available portfolios: {available_portfolios}")
+                return False
+            
+            # Check if target already exists
+            if target_portfolio_id in all_portfolios:
+                logger.error(f"Target portfolio '{target_portfolio_id}' already exists")
                 return False
             
             # Deep copy the source portfolio data

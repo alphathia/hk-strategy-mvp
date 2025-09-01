@@ -61,7 +61,43 @@ INSERT INTO portfolio_positions (symbol, company_name, quantity, avg_cost, curre
 ON CONFLICT (symbol) DO NOTHING;
 
 -- Create indexes for better performance
+-- Portfolio Value Analysis Tables
+CREATE TABLE IF NOT EXISTS portfolio_analyses (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_notes TEXT,
+    start_pv DECIMAL(15, 2),
+    end_pv DECIMAL(15, 2),
+    total_return DECIMAL(10, 4),
+    max_drawdown DECIMAL(10, 4),
+    volatility DECIMAL(10, 4),
+    CONSTRAINT valid_date_range CHECK (end_date >= start_date),
+    CONSTRAINT max_18_months CHECK (end_date <= start_date + INTERVAL '18 months')
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_value_history (
+    id SERIAL PRIMARY KEY,
+    analysis_id INTEGER NOT NULL,
+    trade_date DATE NOT NULL,
+    portfolio_value DECIMAL(15, 2) NOT NULL,
+    cash_value DECIMAL(15, 2) DEFAULT 0,
+    total_value DECIMAL(15, 2) NOT NULL,
+    daily_change DECIMAL(15, 2) DEFAULT 0,
+    daily_return DECIMAL(10, 6) DEFAULT 0,
+    top_contributors JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES portfolio_analyses(id) ON DELETE CASCADE,
+    UNIQUE(analysis_id, trade_date)
+);
+
+-- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_symbol ON trading_signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_created ON trading_signals(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_price_symbol_time ON price_history(symbol, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_analyses_dates ON portfolio_analyses(start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_value_history_analysis_date ON portfolio_value_history(analysis_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_value_history_date ON portfolio_value_history(trade_date DESC);

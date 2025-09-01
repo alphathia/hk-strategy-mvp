@@ -756,6 +756,8 @@ elif st.session_state.current_page == 'portfolio':
                 color='P&L',
                 color_continuous_scale=['red', 'green']
             )
+
+
             fig_bar.update_layout(showlegend=False)
             st.plotly_chart(fig_bar, use_container_width=True)
 

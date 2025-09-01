@@ -384,21 +384,21 @@ class HKStrategyEngine(HKStrategy):
 
     def save_signal_to_db(self, ticker: str, signals: SignalResult, indicators: Indicators):
         """Save signals to PostgreSQL"""
-        # Determine primary signal type
+        # Determine primary signal type using new TXYZN convention
         if signals.A:
-            signal_type = 'A'
+            signal_type = 'BBRK9'  # Strong Buy Breakout, strength 9
             signal_strength = 0.9
         elif signals.B:
-            signal_type = 'B' 
+            signal_type = 'BRSV7'  # Buy RSI Reversal, strength 7 
             signal_strength = 0.8
         elif signals.C:
-            signal_type = 'C'
+            signal_type = 'SBRK3'  # Sell Breakdown, strength 3
             signal_strength = 0.7
         elif signals.D:
-            signal_type = 'D'
+            signal_type = 'SOVB1'  # Sell Overbought, strength 1
             signal_strength = 0.6
         else:
-            signal_type = 'C'  # Default to hold
+            signal_type = 'HMOM5'  # Hold Momentum, strength 5 (default)
             signal_strength = 0.5
 
         self.db.insert_trading_signal(

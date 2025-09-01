@@ -151,89 +151,36 @@ def add_symbol_dialog(portfolio_id: str):
         if st.button("🔍 Check Symbol", use_container_width=True):
             if symbol_input.strip():
                 trimmed_symbol = symbol_input.strip().upper()
-                
-                # Clear previous validation state
-                st.session_state['validation_success'] = False
-                
-                # Show loading message
-                with st.spinner(f"Looking up {trimmed_symbol} on Yahoo Finance..."):
-                    try:
-                        # Create ticker and fetch info
-                        stock = yf.Ticker(trimmed_symbol)
-                        info = stock.info
-                        
-                        # Enhanced validation and name retrieval
-                        if info and len(info) > 1:
-                            # Try multiple name fields for better reliability
-                            long_name = info.get('longName', '').strip()
-                            short_name = info.get('shortName', '').strip()
-                            display_name = info.get('displayName', '').strip()
-                            
-                            # Choose best available name
-                            if long_name and long_name != '':
-                                company_name = long_name
-                            elif short_name and short_name != '':
-                                company_name = short_name
-                            elif display_name and display_name != '':
-                                company_name = display_name
-                            else:
-                                # Fallback: use symbol-based name
-                                if trimmed_symbol.endswith('.HK'):
-                                    code = trimmed_symbol.replace('.HK', '')
-                                    company_name = f"HK Stock {code}"
-                                else:
-                                    company_name = 'Unknown Company'
-                            
-                            # Determine sector with expanded mapping
-                            raw_sector = info.get('sector', 'Other')
-                            if raw_sector in ["Technology", "Information Technology", "Communication Services"]:
-                                sector = "Tech"
-                            elif raw_sector in ["Financials", "Financial Services"]:
-                                sector = "Financials"
-                            elif raw_sector in ["Real Estate"]:
-                                sector = "REIT"
-                            elif raw_sector in ["Energy"]:
-                                sector = "Energy"
-                            elif raw_sector in ["Consumer Discretionary", "Consumer Staples"]:
-                                sector = "Consumer"
-                            elif raw_sector in ["Healthcare"]:
-                                sector = "Healthcare"
-                            else:
-                                sector = "Other"
-                            
-                            # Validate that we have meaningful data
-                            quote_type = info.get('quoteType', '')
-                            if quote_type == 'EQUITY' or info.get('symbol') == trimmed_symbol:
-                                # Store in session state for display
-                                st.session_state['validated_symbol'] = trimmed_symbol
-                                st.session_state['validated_company'] = company_name
-                                st.session_state['validated_sector'] = sector
-                                st.session_state['validation_success'] = True
-                                st.success(f"✅ Found: {company_name}")
-                                
-                                # Show additional info for debugging
-                                if quote_type:
-                                    st.info(f"Type: {quote_type} | Sector: {raw_sector}")
-                            else:
-                                st.session_state['validation_success'] = False
-                                st.error("❌ Symbol exists but may not be a valid equity")
-                                st.info(f"Quote type: {quote_type}, Raw data keys: {len(info)}")
+                # Try to get company info from Yahoo Finance
+                try:
+                    stock = yf.Ticker(trimmed_symbol)
+                    info = stock.info
+                    if info and len(info) > 1:
+                        company_name = info.get('longName', info.get('shortName', 'Unknown Company'))
+                        # Try to determine sector
+                        sector = info.get('sector', 'Other')
+                        if sector in ["Technology", "Information Technology"]:
+                            sector = "Tech"
+                        elif sector in ["Financials", "Financial Services"]:
+                            sector = "Financials"
+                        elif sector in ["Real Estate"]:
+                            sector = "REIT"
+                        elif sector in ["Energy"]:
+                            sector = "Energy"
                         else:
-                            st.session_state['validation_success'] = False
-                            st.error("❌ Symbol not found on Yahoo Finance")
-                            st.info(f"Received data keys: {len(info) if info else 0}")
-                            
-                    except Exception as e:
+                            sector = "Other"
+                        
+                        # Store in session state for display
+                        st.session_state['validated_symbol'] = trimmed_symbol
+                        st.session_state['validated_company'] = company_name
+                        st.session_state['validated_sector'] = sector
+                        st.session_state['validation_success'] = True
+                        st.success(f"✅ Found: {company_name}")
+                    else:
                         st.session_state['validation_success'] = False
-                        st.error(f"❌ Error validating symbol: {str(e)}")
-                        
-                        # Provide helpful troubleshooting info
-                        if "404" in str(e):
-                            st.info("💡 Make sure to use the correct format (e.g., 0700.HK)")
-                        elif "timeout" in str(e).lower():
-                            st.info("💡 Network timeout - please try again")
-                        else:
-                            st.info("💡 Check internet connection and try again")
+                        st.error("❌ Symbol not found on Yahoo Finance")
+                except Exception as e:
+                    st.error(f"❌ Error validating symbol: {str(e)}")
             else:
                 st.error("Please enter a symbol")
     
@@ -455,204 +402,6 @@ st.set_page_config(
     layout="wide"
 )
 
-@st.dialog("Create New Portfolio")
-def create_portfolio_dialog():
-    """Modal dialog for creating a new portfolio"""
-    st.markdown("**Create a new portfolio to track your investments**")
-    st.markdown("---")
-    
-    # Form fields
-    new_portfolio_id = st.text_input(
-        "Portfolio ID:",
-        placeholder="e.g., TECH_GROWTH",
-        key="new_portfolio_id_modal",
-        help="Unique identifier for the portfolio (no spaces, use underscores)"
-    )
-    new_portfolio_name = st.text_input(
-        "Portfolio Name:",
-        placeholder="e.g., Technology Growth Stocks",
-        key="new_portfolio_name_modal",
-        help="Display name for the portfolio"
-    )
-    new_portfolio_desc = st.text_area(
-        "Description:",
-        placeholder="Brief description of the portfolio strategy...",
-        key="new_portfolio_desc_modal",
-        help="Optional description of the portfolio"
-    )
-    
-    st.markdown("---")
-    
-    # Validation
-    error_msg = ""
-    if new_portfolio_id:
-        portfolio_id = new_portfolio_id.strip().upper().replace(' ', '_')
-        if portfolio_id in st.session_state.portfolios:
-            error_msg = f"Portfolio '{portfolio_id}' already exists!"
-        elif not new_portfolio_name.strip():
-            error_msg = "Portfolio Name is required"
-    elif new_portfolio_name:
-        error_msg = "Portfolio ID is required"
-    
-    if error_msg:
-        st.error(f"❌ {error_msg}")
-    
-    # Buttons
-    col_create, col_cancel = st.columns(2)
-    with col_create:
-        disabled = bool(error_msg) or not new_portfolio_id or not new_portfolio_name
-        if st.button("✅ Create Portfolio", use_container_width=True, disabled=disabled):
-            portfolio_id = new_portfolio_id.strip().upper().replace(' ', '_')
-            
-            # Create new portfolio
-            st.session_state.portfolios[portfolio_id] = {
-                'name': new_portfolio_name.strip(),
-                'description': new_portfolio_desc.strip(),
-                'positions': []
-            }
-            
-            st.success(f"✅ Portfolio '{new_portfolio_name}' created successfully!")
-            
-            # Clear form fields
-            for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
-                if key in st.session_state:
-                    st.session_state[key] = ''
-            
-            # Brief delay to show success message
-            import time
-            time.sleep(1)
-            st.rerun()
-    
-    with col_cancel:
-        if st.button("❌ Cancel", use_container_width=True):
-            # Clear form fields on cancel
-            for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
-                if key in st.session_state:
-                    st.session_state[key] = ''
-            st.rerun()
-
-@st.dialog("Total Positions Details")
-def show_total_positions_dialog(symbol_details):
-    """Modal dialog showing all unique symbols across portfolios"""
-    st.markdown("**All unique symbols across your portfolios**")
-    st.markdown("---")
-    
-    if not symbol_details:
-        st.info("No symbols found in any portfolio.")
-        if st.button("🔙 Back", use_container_width=True):
-            st.rerun()
-        return
-    
-    # Create a sorted list for display
-    symbols_list = []
-    for symbol, details in symbol_details.items():
-        symbols_list.append({
-            "Symbol": symbol,
-            "Company Name": details.get('company_name', 'Unknown'),
-            "Sector": details.get('sector', 'Other')
-        })
-    
-    # Sort by symbol
-    symbols_list.sort(key=lambda x: x['Symbol'])
-    
-    # Display summary
-    st.info(f"📊 **Total Unique Symbols:** {len(symbols_list)}")
-    
-    # Display table
-    st.markdown("### 📋 Symbol Details")
-    
-    # Create table header
-    header_cols = st.columns([1, 2.5, 1.5])
-    with header_cols[0]:
-        st.markdown("**Symbol**")
-    with header_cols[1]:
-        st.markdown("**Company Name**")
-    with header_cols[2]:
-        st.markdown("**Sector**")
-    
-    st.markdown("---")
-    
-    # Display rows
-    for symbol_data in symbols_list:
-        row_cols = st.columns([1, 2.5, 1.5])
-        with row_cols[0]:
-            st.write(symbol_data["Symbol"])
-        with row_cols[1]:
-            # Truncate long company names
-            company_name = symbol_data["Company Name"]
-            if len(company_name) > 35:
-                company_name = company_name[:32] + "..."
-            st.write(company_name)
-        with row_cols[2]:
-            st.write(symbol_data["Sector"])
-    
-    st.markdown("---")
-    
-    # Back button
-    if st.button("🔙 Back", use_container_width=True):
-        st.rerun()
-
-@st.dialog("Active Positions Details")
-def show_active_positions_dialog(active_symbol_details):
-    """Modal dialog showing only active symbols (quantity > 0)"""
-    st.markdown("**Active symbols with holdings > 0**")
-    st.markdown("---")
-    
-    if not active_symbol_details:
-        st.info("No active positions found.")
-        if st.button("🔙 Back", use_container_width=True):
-            st.rerun()
-        return
-    
-    # Create a sorted list for display
-    active_symbols_list = []
-    for symbol, details in active_symbol_details.items():
-        active_symbols_list.append({
-            "Symbol": symbol,
-            "Company Name": details.get('company_name', 'Unknown'),
-            "Sector": details.get('sector', 'Other')
-        })
-    
-    # Sort by symbol
-    active_symbols_list.sort(key=lambda x: x['Symbol'])
-    
-    # Display summary
-    st.info(f"📊 **Active Positions:** {len(active_symbols_list)}")
-    
-    # Display table
-    st.markdown("### 📋 Active Symbol Details")
-    
-    # Create table header
-    header_cols = st.columns([1, 2.5, 1.5])
-    with header_cols[0]:
-        st.markdown("**Symbol**")
-    with header_cols[1]:
-        st.markdown("**Company Name**")
-    with header_cols[2]:
-        st.markdown("**Sector**")
-    
-    st.markdown("---")
-    
-    # Display rows
-    for symbol_data in active_symbols_list:
-        row_cols = st.columns([1, 2.5, 1.5])
-        with row_cols[0]:
-            st.write(symbol_data["Symbol"])
-        with row_cols[1]:
-            # Truncate long company names
-            company_name = symbol_data["Company Name"]
-            if len(company_name) > 35:
-                company_name = company_name[:32] + "..."
-            st.write(company_name)
-        with row_cols[2]:
-            st.write(symbol_data["Sector"])
-    
-    st.markdown("---")
-    
-    # Back button
-    if st.button("🔙 Back", use_container_width=True):
-        st.rerun()
-
 # Helper function for safe percentage calculations
 def _safe_percentage(numerator, denominator):
     """Safely calculate percentage to avoid divide by zero errors"""
@@ -806,343 +555,6 @@ def get_company_name(symbol):
         return info.get('longName', info.get('shortName', 'Unknown Company'))
     except:
         return 'Unknown Company'
-
-@st.cache_data
-def fetch_technical_analysis_data(symbol: str):
-    """Fetch technical analysis data from daily_equity_technicals table"""
-    try:
-        db = st.session_state.db_manager
-        conn = db.get_connection()
-        cur = conn.cursor()
-        
-        # Get latest technical data for this symbol
-        cur.execute("""
-            SELECT 
-                high_price as day_high,
-                low_price as day_low,
-                week_52_high,
-                week_52_low,
-                rsi_14,
-                ema_12,
-                ema_26,
-                sma_20,
-                macd,
-                volume_ratio,
-                atr_14,
-                support_level,
-                close_price,
-                trade_date
-            FROM daily_equity_technicals 
-            WHERE symbol = %s 
-            ORDER BY trade_date DESC 
-            LIMIT 1
-        """, (symbol,))
-        
-        result = cur.fetchone()
-        conn.close()
-        
-        if result:
-            return {
-                'day_high': result[0],
-                'day_low': result[1],
-                'week_52_high': result[2],
-                'week_52_low': result[3],
-                'rsi_14': result[4],
-                'ema_12': result[5],
-                'ema_26': result[6],
-                'sma_20': result[7],
-                'macd': result[8],
-                'volume_ratio': result[9],
-                'atr_14': result[10],
-                'support_level': result[11],
-                'close_price': result[12],
-                'trade_date': result[13]
-            }
-        else:
-            # Return fallback data if no technical data found
-            return get_fallback_technical_data(symbol)
-            
-    except Exception as e:
-        st.error(f"Error fetching technical data: {e}")
-        return get_fallback_technical_data(symbol)
-
-def get_fallback_technical_data(symbol: str):
-    """Provide fallback technical data when database data is unavailable"""
-    # Try to fetch some basic price data from Yahoo Finance
-    try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="1y")
-        
-        if not hist.empty:
-            current_price = hist['Close'].iloc[-1]
-            day_high = hist['High'].iloc[-1]
-            day_low = hist['Low'].iloc[-1]
-            week_52_high = hist['High'].max()
-            week_52_low = hist['Low'].min()
-            
-            # Calculate simple RSI approximation
-            delta = hist['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            current_rsi = rsi.iloc[-1] if not rsi.empty else 50.0
-            
-            return {
-                'day_high': day_high,
-                'day_low': day_low,
-                'week_52_high': week_52_high,
-                'week_52_low': week_52_low,
-                'rsi_14': current_rsi,
-                'ema_12': current_price * 1.01,  # Approximation
-                'ema_26': current_price * 0.99,  # Approximation
-                'sma_20': hist['Close'].rolling(20).mean().iloc[-1],
-                'macd': 0.5,  # Placeholder
-                'volume_ratio': 1.0,  # Placeholder
-                'atr_14': (day_high - day_low),
-                'support_level': week_52_low * 1.05,
-                'close_price': current_price,
-                'trade_date': hist.index[-1].date()
-            }
-    except:
-        pass
-    
-    # Final fallback with placeholder data
-    return {
-        'day_high': 325.50,
-        'day_low': 318.20,
-        'week_52_high': 385.00,
-        'week_52_low': 245.80,
-        'rsi_14': 65.2,
-        'ema_12': 321.45,
-        'ema_26': 315.80,
-        'sma_20': 319.60,
-        'macd': 2.45,
-        'volume_ratio': 1.35,
-        'atr_14': 8.45,
-        'support_level': 310.00,
-        'close_price': 320.00,
-        'trade_date': None
-    }
-
-@st.cache_data
-def fetch_equity_prices_by_date(symbol: str, target_date):
-    """
-    Fetch OHLCV data for a specific symbol and date from daily_equity_technicals table
-    
-    Args:
-        symbol: Stock symbol (e.g., '0700.HK')
-        target_date: Target date (date object or string)
-        
-    Returns:
-        Dict with open_price, close_price, high_price, low_price, volume, trade_date, data_source
-    """
-    try:
-        db = st.session_state.db_manager
-        conn = db.get_connection()
-        cur = conn.cursor()
-        
-        # Convert date to string if needed
-        if hasattr(target_date, 'strftime'):
-            date_str = target_date.strftime('%Y-%m-%d')
-        else:
-            date_str = str(target_date)
-        
-        # First try: exact date match
-        cur.execute("""
-            SELECT open_price, close_price, high_price, low_price, volume, trade_date
-            FROM daily_equity_technicals 
-            WHERE symbol = %s AND trade_date = %s
-        """, (symbol, date_str))
-        
-        result = cur.fetchone()
-        
-        if result:
-            return {
-                'open_price': float(result[0]) if result[0] else None,
-                'close_price': float(result[1]) if result[1] else None,
-                'high_price': float(result[2]) if result[2] else None,
-                'low_price': float(result[3]) if result[3] else None,
-                'volume': int(result[4]) if result[4] else None,
-                'trade_date': result[5],
-                'data_source': 'database_exact'
-            }
-        
-        # Second try: nearest date (within 7 days)
-        cur.execute("""
-            SELECT open_price, close_price, high_price, low_price, volume, trade_date
-            FROM daily_equity_technicals 
-            WHERE symbol = %s 
-            AND ABS(trade_date - %s::date) <= 7
-            ORDER BY ABS(trade_date - %s::date)
-            LIMIT 1
-        """, (symbol, date_str, date_str))
-        
-        result = cur.fetchone()
-        
-        if result:
-            return {
-                'open_price': float(result[0]) if result[0] else None,
-                'close_price': float(result[1]) if result[1] else None,
-                'high_price': float(result[2]) if result[2] else None,
-                'low_price': float(result[3]) if result[3] else None,
-                'volume': int(result[4]) if result[4] else None,
-                'trade_date': result[5],
-                'data_source': 'database_nearest'
-            }
-        
-        conn.close()
-        
-        # Third try: Yahoo Finance fallback for the specific date
-        return get_yahoo_finance_price_fallback(symbol, target_date)
-        
-    except Exception as e:
-        st.error(f"Error fetching price data for {symbol}: {e}")
-        return get_yahoo_finance_price_fallback(symbol, target_date)
-
-def get_yahoo_finance_price_fallback(symbol: str, target_date):
-    """Fallback to Yahoo Finance for specific date price data"""
-    try:
-        import yfinance as yf
-        from datetime import timedelta
-        
-        # Convert target_date to date object if needed
-        if hasattr(target_date, 'strftime'):
-            date_obj = target_date
-        else:
-            from datetime import datetime
-            date_obj = datetime.strptime(str(target_date), '%Y-%m-%d').date()
-        
-        # Fetch data around the target date
-        start_date = date_obj - timedelta(days=5)
-        end_date = date_obj + timedelta(days=2)
-        
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(start=start_date, end=end_date)
-        
-        if not hist.empty:
-            # Try to find data for the exact date first
-            target_timestamp = date_obj.strftime('%Y-%m-%d')
-            
-            for idx, row in hist.iterrows():
-                if idx.strftime('%Y-%m-%d') == target_timestamp:
-                    return {
-                        'open_price': float(row['Open']),
-                        'close_price': float(row['Close']),
-                        'high_price': float(row['High']),
-                        'low_price': float(row['Low']),
-                        'volume': int(row['Volume']),
-                        'trade_date': date_obj,
-                        'data_source': 'yahoo_exact'
-                    }
-            
-            # If not found, use the closest date
-            latest_row = hist.iloc[-1]
-            return {
-                'open_price': float(latest_row['Open']),
-                'close_price': float(latest_row['Close']),
-                'high_price': float(latest_row['High']),
-                'low_price': float(latest_row['Low']),
-                'volume': int(latest_row['Volume']),
-                'trade_date': hist.index[-1].date(),
-                'data_source': 'yahoo_nearest'
-            }
-        
-    except Exception as e:
-        pass
-    
-    # Final fallback with mock data
-    return {
-        'open_price': 50.0,
-        'close_price': 52.0,
-        'high_price': 53.0,
-        'low_price': 49.5,
-        'volume': 1000000,
-        'trade_date': target_date,
-        'data_source': 'mock_fallback'
-    }
-
-def clear_modal_states():
-    """Clear all modal states to prevent cross-portfolio issues"""
-    st.session_state.show_detail_modal = None
-    st.session_state.show_transaction_modal = None
-    st.session_state.show_technical_modal = None
-    st.session_state.selected_analysis_id = None
-    st.session_state.selected_analysis_date = None
-
-def load_sample_technical_data():
-    """Load sample technical data into the database for demonstration"""
-    try:
-        db = st.session_state.db_manager
-        conn = db.get_connection()
-        cur = conn.cursor()
-        
-        # Sample data for common HK stocks - multiple dates for better testing
-        sample_data = [
-            # 2025-08-31 data
-            ('0700.HK', '2025-08-31', 318.50, 320.00, 314.50, 625.80, 480.30, 65.2, 605.45, 590.80, 602.60, 2.45, 1.35, 8.45, 575.00, 315.00, 15000000),
-            ('1810.HK', '2025-08-31', 13.20, 13.50, 12.80, 68.90, 38.50, 58.7, 54.20, 52.30, 53.85, 1.20, 1.12, 2.85, 50.00, 13.10, 25000000),
-            ('3690.HK', '2025-08-31', 98.30, 101.80, 95.50, 168.20, 89.40, 62.1, 118.45, 114.20, 116.90, 1.85, 1.45, 5.20, 110.00, 97.20, 18000000),
-            ('9618.HK', '2025-08-31', 130.30, 134.70, 128.90, 165.40, 95.80, 56.9, 123.20, 119.60, 122.10, 0.95, 1.28, 4.30, 115.00, 129.10, 12000000),
-            ('9988.HK', '2025-08-31', 118.50, 120.30, 116.20, 178.90, 88.20, 48.3, 122.80, 118.40, 120.95, -0.65, 1.55, 6.10, 112.00, 117.80, 22000000),
-            ('0005.HK', '2025-08-31', 40.20, 40.50, 39.20, 45.80, 35.20, 45.8, 39.85, 38.90, 39.95, 0.85, 1.25, 1.45, 38.50, 39.50, 8500000),
-            ('0939.HK', '2025-08-31', 7.51, 7.62, 7.38, 8.95, 6.20, 52.3, 7.48, 7.35, 7.52, 0.65, 1.18, 0.25, 7.20, 7.45, 45000000),
-            
-            # 2025-08-30 data (previous trading day)
-            ('0700.HK', '2025-08-30', 315.20, 318.50, 312.80, 625.80, 480.30, 64.8, 604.20, 589.50, 601.30, 2.38, 1.32, 8.20, 574.00, 312.50, 14500000),
-            ('1810.HK', '2025-08-30', 13.05, 13.20, 12.65, 68.90, 38.50, 57.9, 53.85, 52.10, 53.60, 1.15, 1.10, 2.80, 49.80, 12.95, 24000000),
-            ('3690.HK', '2025-08-30', 96.80, 98.30, 94.20, 168.20, 89.40, 61.5, 117.20, 113.80, 116.40, 1.78, 1.42, 5.10, 109.50, 96.10, 17500000),
-            ('9618.HK', '2025-08-30', 128.90, 130.30, 127.40, 165.40, 95.80, 56.2, 122.50, 119.20, 121.80, 0.88, 1.25, 4.20, 114.50, 128.20, 11800000),
-            ('9988.HK', '2025-08-30', 117.20, 118.50, 115.80, 178.90, 88.20, 47.8, 122.10, 118.00, 120.50, -0.72, 1.52, 6.00, 111.50, 116.90, 21500000),
-            ('0005.HK', '2025-08-30', 39.80, 40.20, 39.40, 45.80, 35.20, 45.2, 39.60, 38.70, 39.75, 0.82, 1.22, 1.42, 38.30, 39.25, 8200000),
-            ('0939.HK', '2025-08-30', 7.42, 7.51, 7.28, 8.95, 6.20, 51.8, 7.41, 7.32, 7.48, 0.62, 1.15, 0.24, 7.15, 7.38, 44000000),
-            
-            # 2025-08-29 data
-            ('0700.HK', '2025-08-29', 312.50, 315.20, 310.10, 625.80, 480.30, 64.2, 602.80, 588.20, 600.10, 2.31, 1.29, 8.00, 573.00, 310.80, 14200000),
-            ('1810.HK', '2025-08-29', 12.85, 13.05, 12.50, 68.90, 38.50, 57.3, 53.50, 51.90, 53.35, 1.10, 1.08, 2.75, 49.60, 12.80, 23500000),
-            ('3690.HK', '2025-08-29', 95.50, 96.80, 93.80, 168.20, 89.40, 60.9, 116.00, 113.40, 116.00, 1.72, 1.39, 5.00, 109.00, 95.20, 17200000),
-            
-            # Add some older dates for comprehensive testing
-            ('0700.HK', '2025-01-02', 295.50, 298.20, 292.80, 625.80, 480.30, 58.5, 580.20, 570.50, 585.30, 1.85, 1.15, 7.20, 565.00, 293.10, 16500000),
-            ('1810.HK', '2025-01-02', 11.85, 12.15, 11.60, 68.90, 38.50, 52.3, 48.50, 47.90, 48.85, 0.95, 0.98, 2.45, 46.80, 11.75, 28000000),
-            ('0005.HK', '2025-01-02', 37.80, 38.20, 37.40, 45.80, 35.20, 42.2, 37.60, 36.70, 37.75, 0.72, 1.12, 1.32, 36.30, 37.65, 9200000),
-        ]
-        
-        for symbol, date, close, high, low, w52h, w52l, rsi, ema12, ema26, sma20, macd, vol_ratio, atr, support, open_price, volume in sample_data:
-            cur.execute("""
-                INSERT INTO daily_equity_technicals 
-                (symbol, trade_date, open_price, close_price, high_price, low_price, week_52_high, week_52_low,
-                 rsi_14, ema_12, ema_26, sma_20, macd, volume_ratio, atr_14, support_level, volume)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (symbol, trade_date) 
-                DO UPDATE SET
-                    open_price = EXCLUDED.open_price,
-                    close_price = EXCLUDED.close_price,
-                    high_price = EXCLUDED.high_price,
-                    low_price = EXCLUDED.low_price,
-                    week_52_high = EXCLUDED.week_52_high,
-                    week_52_low = EXCLUDED.week_52_low,
-                    rsi_14 = EXCLUDED.rsi_14,
-                    ema_12 = EXCLUDED.ema_12,
-                    ema_26 = EXCLUDED.ema_26,
-                    sma_20 = EXCLUDED.sma_20,
-                    macd = EXCLUDED.macd,
-                    volume_ratio = EXCLUDED.volume_ratio,
-                    atr_14 = EXCLUDED.atr_14,
-                    support_level = EXCLUDED.support_level,
-                    volume = EXCLUDED.volume
-            """, (symbol, date, open_price, close, high, low, w52h, w52l, rsi, ema12, ema26, sma20, macd, vol_ratio, atr, support, volume))
-        
-        conn.commit()
-        conn.close()
-        
-        # Clear cache to force refresh of technical data
-        st.cache_data.clear()
-        st.success(f"✅ Loaded sample technical data for {len(sample_data)} symbols")
-        st.rerun()
-        
-    except Exception as e:
-        st.error(f"Error loading sample data: {e}")
 
 def check_database_health():
     """Check PostgreSQL database connectivity with detailed diagnostics"""
@@ -1913,11 +1325,7 @@ def generate_breadcrumbs():
                 if selected in st.session_state.portfolios:
                     breadcrumbs.append(f"📂 {st.session_state.portfolios[selected]['name']}")
         elif current_page == 'pv_analysis':
-            breadcrumbs.append('📈 Portfolio Analysis')
-            # Add portfolio name if available
-            selected_for_pv = st.session_state.get('selected_portfolio') or st.session_state.get('selected_portfolio_for_pv')
-            if selected_for_pv and selected_for_pv in st.session_state.portfolios:
-                breadcrumbs.append(f"📂 {st.session_state.portfolios[selected_for_pv]['name']}")
+            breadcrumbs.append('📈 Advanced Analysis')
     elif current_section == 'strategy':
         if current_page == 'equity_analysis':
             breadcrumbs.append('📈 Equity Analysis')
@@ -2104,9 +1512,9 @@ curl -I https://finance.yahoo.com
     with col1:
         st.metric("Total Portfolios", total_portfolios, help="Number of portfolios in your system")
     with col2:
-        st.metric("Total Positions", total_positions, help="Number of unique stock symbols across all portfolios (no duplicates)")
+        st.metric("Total Positions", total_positions, help="Total number of stock positions across all portfolios (includes positions with quantity = 0)")
     with col3:
-        st.metric("Active Positions", active_positions, help="Number of unique symbols with quantity > 0 across all portfolios")
+        st.metric("Active Positions", active_positions, help="Number of positions with quantity > 0 (stocks you currently hold)")
     with col4:
         st.metric("Cached Prices", len(st.session_state.portfolio_prices), help="Number of portfolios with cached price data")
     
@@ -2129,697 +1537,516 @@ if st.session_state.current_page == 'system':
     # System status content is later in the file
 
 elif st.session_state.current_page == 'pv_analysis':
-    # Portfolio Analysis Dashboard
-    st.subheader("📈 Portfolio Analysis Dashboard")
+    # Advanced Portfolio Analysis Page
+    st.subheader("📈 Advanced Portfolio Analysis")
     
-    # Initialize Portfolio Analysis Manager
-    if 'portfolio_analysis_manager' not in st.session_state:
-        from portfolio_analysis_manager import PortfolioAnalysisManager
-        st.session_state.portfolio_analysis_manager = PortfolioAnalysisManager(st.session_state.db_manager)
-    
-    # Check if portfolio is selected (either from regular selection or from Advanced button)
-    selected_portfolio = st.session_state.get('selected_portfolio') or st.session_state.get('selected_portfolio_for_pv')
-    
-    # If coming from Advanced Portfolio Analysis button, set the regular selected_portfolio too
-    if st.session_state.get('selected_portfolio_for_pv') and not st.session_state.get('selected_portfolio'):
-        st.session_state.selected_portfolio = st.session_state.selected_portfolio_for_pv
-        selected_portfolio = st.session_state.selected_portfolio_for_pv
-        # Clear modal states when switching portfolios
-        clear_modal_states()
-    
-    # Check if portfolio changed and clear modal states
-    if 'previous_selected_portfolio' in st.session_state and st.session_state.previous_selected_portfolio != selected_portfolio:
-        clear_modal_states()
-    st.session_state.previous_selected_portfolio = selected_portfolio
-    
-    if not selected_portfolio:
-        # Show "Load Portfolio" page
-        st.markdown("## 📂 Load Portfolio")
-        st.markdown("Select a portfolio to begin analysis.")
+    # Check if a portfolio was selected for analysis
+    if not st.session_state.selected_portfolio_for_pv:
+        st.error("❌ No portfolio selected for analysis!")
+        st.info("Please go back to the Portfolio Dashboard and select a portfolio first.")
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([1, 1])
         with col1:
-            portfolio_keys = list(st.session_state.portfolios.keys())
-            if portfolio_keys:
-                selected = st.selectbox(
-                    "Choose Portfolio:",
-                    options=portfolio_keys,
-                    format_func=lambda x: f"{st.session_state.portfolios[x]['name']}"
-                )
-                
-                if st.button("📂 Load Portfolio", type="primary"):
-                    st.session_state.selected_portfolio = selected
-                    st.rerun()
-            else:
-                st.error("No portfolios available. Please create a portfolio first.")
-                
+            if st.button("🔙 Back to Portfolio Dashboard"):
+                st.session_state.current_page = 'portfolio'
+                st.rerun()
         with col2:
-            st.markdown("### Quick Actions")
-            if st.button("🔙 Back to Overview"):
+            if st.button("📋 Go to Overview"):
                 st.session_state.current_page = 'overview'
                 st.rerun()
         st.stop()
     
-    # Portfolio is selected - show analysis interface
+    # Get selected portfolio information
+    selected_portfolio = st.session_state.selected_portfolio_for_pv
+    if selected_portfolio not in st.session_state.portfolios:
+        st.error(f"❌ Portfolio '{selected_portfolio}' not found!")
+        st.session_state.selected_portfolio_for_pv = None
+        st.stop()
+    
     current_portfolio = st.session_state.portfolios[selected_portfolio]
     
-    # Header with portfolio name and action buttons
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        st.markdown(f"### Portfolio Analysis: **{current_portfolio['name']}**")
-    with col2:
-        if st.button("📈 Update Market Prices", help="Refresh all analyses with current market prices"):
-            with st.spinner("Updating market prices..."):
-                success, message, count = st.session_state.portfolio_analysis_manager.refresh_all_analyses_for_portfolio(selected_portfolio)
-                if success:
-                    st.success(f"✅ {message}")
-                    # Clear price cache to force fresh data
-                    if 'price_data_cache' in st.session_state:
-                        st.session_state.price_data_cache.clear()
-                        st.session_state.cache_expiry.clear()
-                else:
-                    st.error(f"❌ {message}")
-                st.rerun()
-    with col3:
-        if st.button("➕ Create New Analysis", type="primary"):
-            st.session_state.show_create_analysis_dialog = True
+    # Breadcrumb navigation
+    st.markdown(f"**Navigation:** Portfolio Dashboard → {current_portfolio['name']} → Advanced Portfolio Analysis")
+    
+    col_back, col_switch, col_load, col_refresh = st.columns([1, 2, 1, 1])
+    with col_back:
+        if st.button("🔙 Back to Portfolio", type="secondary"):
+            st.session_state.current_page = 'portfolio'
             st.rerun()
     
-    # Create New Analysis Dialog
-    if st.session_state.get('show_create_analysis_dialog', False):
-        with st.container():
-            st.markdown("---")
-            st.markdown("### ➕ Create New Portfolio Analysis")
-            
-            # Show which portfolio this analysis will be created for
-            current_portfolio = st.session_state.portfolios[selected_portfolio]
-            st.info(f"📂 **Creating analysis for portfolio:** {current_portfolio['name']} (ID: {selected_portfolio})")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                analysis_name = st.text_input(
-                    "Analysis Name*",
-                    placeholder="e.g., Q1 2024 Performance Review",
-                    help="Enter a unique name for this analysis"
-                )
-                start_date = st.date_input(
-                    "Start Date*",
-                    value=date.today() - timedelta(days=90),
-                    max_value=date.today()
-                )
-            
-            with col2:
-                start_cash = st.number_input(
-                    "Start Cash (HKD)*",
-                    min_value=0.0,
-                    value=100000.0,
-                    step=10000.0,
-                    format="%.2f"
-                )
-                end_date = st.date_input(
-                    "End Date*",
-                    value=date.today(),
-                    max_value=date.today()
-                )
-            
-            # Validation and buttons
-            error_msg = ""
-            if not analysis_name.strip():
-                error_msg = "Analysis name is required"
-            elif end_date <= start_date:
-                error_msg = "End date must be after start date"
-            elif not st.session_state.portfolio_analysis_manager.validate_analysis_name(selected_portfolio, analysis_name.strip()):
-                error_msg = f"Analysis name '{analysis_name.strip()}' already exists for this portfolio"
-            
-            if error_msg:
-                st.error(f"❌ {error_msg}")
-            
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                if st.button("💾 Save", disabled=bool(error_msg), type="primary", use_container_width=True):
-                    success, message, analysis_id = st.session_state.portfolio_analysis_manager.create_analysis(
-                        portfolio_id=selected_portfolio,
-                        analysis_name=analysis_name.strip(),
-                        start_date=start_date,
-                        end_date=end_date,
-                        start_cash=start_cash
-                    )
-                    
-                    if success:
-                        st.success(f"✅ {message}")
-                        st.session_state.show_create_analysis_dialog = False
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {message}")
-            
-            with col_cancel:
-                if st.button("❌ Cancel", use_container_width=True):
-                    st.session_state.show_create_analysis_dialog = False
-                    st.rerun()
-            
-            st.markdown("---")
+    with col_switch:
+        # Portfolio selector dropdown for switching portfolios
+        portfolio_keys = list(st.session_state.portfolios.keys())
+        current_index = portfolio_keys.index(selected_portfolio) if selected_portfolio in portfolio_keys else 0
+        
+        switch_portfolio = st.selectbox(
+            "Switch Portfolio:",
+            options=portfolio_keys,
+            index=current_index,
+            format_func=lambda x: f"{st.session_state.portfolios[x]['name'][:20]}..." if len(st.session_state.portfolios[x]['name']) > 20 else st.session_state.portfolios[x]['name'],
+            key="pv_analysis_portfolio_selector",
+            help="Select a different portfolio to analyze"
+        )
     
-    # Portfolio Analysis Table
-    st.markdown("### 📊 Portfolio Analyses")
-    
-    # Get analyses for this portfolio
-    analyses_df = st.session_state.portfolio_analysis_manager.get_analysis_summary(selected_portfolio)
-    
-    if analyses_df.empty:
-        st.info("No portfolio analyses found. Create your first analysis using the button above.")
-    else:
-        # Initialize comparison state
-        if 'selected_for_compare' not in st.session_state:
-            st.session_state.selected_for_compare = []
-        
-        # Custom table layout with simplified columns
-        st.markdown("#### Analysis Summary")
-        
-        # Table header - Updated layout with Detail and Transaction buttons
-        header_col1, header_col2, header_col3, header_col4, header_col5, header_col6, header_col7, header_col8 = st.columns([0.8, 2.5, 1.2, 1.2, 1.2, 1.0, 1.0, 1])
-        with header_col1:
-            st.markdown("**Compare**")
-        with header_col2:
-            st.markdown("**Name**")
-        with header_col3:
-            st.markdown("**Start Date**")
-        with header_col4:
-            st.markdown("**End Date**")
-        with header_col5:
-            st.markdown("**Start Cash**")
-        with header_col6:
-            st.markdown("**Detail**")
-        with header_col7:
-            st.markdown("**Transaction**")
-        with header_col8:
-            st.markdown("**Delete**")
-        
-        st.markdown("---")
-        
-        # Initialize delete confirmation state
-        if 'delete_confirm_id' not in st.session_state:
-            st.session_state.delete_confirm_id = None
-        
-        # Initialize modal states
-        if 'show_detail_modal' not in st.session_state:
-            st.session_state.show_detail_modal = None
-        if 'show_transaction_modal' not in st.session_state:
-            st.session_state.show_transaction_modal = None
-        
-        # Table rows
-        for idx, row in analyses_df.iterrows():
-            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([0.8, 2.5, 1.2, 1.2, 1.2, 1.0, 1.0, 1])
-            
-            with col1:
-                # Compare checkbox
-                compare_key = f"compare_{row['id']}"
-                is_selected = st.checkbox("", key=compare_key, value=row['id'] in st.session_state.selected_for_compare)
-                
-                # Update selected list
-                if is_selected and row['id'] not in st.session_state.selected_for_compare:
-                    st.session_state.selected_for_compare.append(row['id'])
-                elif not is_selected and row['id'] in st.session_state.selected_for_compare:
-                    st.session_state.selected_for_compare.remove(row['id'])
-            
-            with col2:
-                st.markdown(f"**{row['name']}**")
-            
-            with col3:
-                start_date_str = row['start_date'].strftime("%Y-%m-%d") if pd.notna(row['start_date']) else "-"
-                st.write(start_date_str)
-            
-            with col4:
-                end_date_str = row['end_date'].strftime("%Y-%m-%d") if pd.notna(row['end_date']) else "-"
-                st.write(end_date_str)
-            
-            with col5:
-                start_cash_str = f"${row['start_cash']:,.0f}" if pd.notna(row['start_cash']) else "-"
-                st.write(start_cash_str)
-            
-            with col6:
-                # Detail button
-                if st.button("📊", key=f"detail_{row['id']}", help=f"View details for {row['name']}"):
-                    st.session_state.show_detail_modal = row['id']
-                    st.rerun()
-            
-            with col7:
-                # Transaction button  
-                if st.button("📝", key=f"transaction_{row['id']}", help=f"View transactions for {row['name']}"):
-                    st.session_state.show_transaction_modal = row['id']
-                    st.rerun()
-            
-            with col8:
-                # Delete button with confirmation
-                if st.session_state.delete_confirm_id == row['id']:
-                    # Show confirmation buttons
-                    subcol1, subcol2 = st.columns(2)
-                    with subcol1:
-                        if st.button("✅", key=f"confirm_delete_{row['id']}", help="Confirm delete"):
-                            success, message = st.session_state.portfolio_analysis_manager.delete_analysis(row['id'])
-                            if success:
-                                st.success(f"✅ {message}")
-                                st.session_state.delete_confirm_id = None
-                                if row['id'] in st.session_state.selected_for_compare:
-                                    st.session_state.selected_for_compare.remove(row['id'])
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {message}")
-                    with subcol2:
-                        if st.button("❌", key=f"cancel_delete_{row['id']}", help="Cancel"):
-                            st.session_state.delete_confirm_id = None
-                            st.rerun()
-                else:
-                    # Show delete button
-                    if st.button("🗑️", key=f"delete_{row['id']}", help=f"Delete '{row['name']}'"):
-                        st.session_state.delete_confirm_id = row['id']
-                        st.rerun()
-            
-            # Add a subtle separator
-            st.markdown('<hr style="margin:5px 0; border:0.5px solid #e0e0e0">', unsafe_allow_html=True)
-        
-        # Detail Modal
-        if st.session_state.show_detail_modal:
-            detail_matches = analyses_df[analyses_df['id'] == st.session_state.show_detail_modal]
-            if detail_matches.empty:
-                # Analysis not found in current portfolio - clear modal state
-                st.session_state.show_detail_modal = None
+    with col_load:
+        if st.button("🔄 Load Portfolio", type="primary"):
+            if switch_portfolio != selected_portfolio:
+                # Update the selected portfolio for PV analysis
+                st.session_state.selected_portfolio_for_pv = switch_portfolio
+                # Clear current analysis to avoid confusion
+                st.session_state.current_analysis = None
+                st.success(f"✅ Switched to {st.session_state.portfolios[switch_portfolio]['name']}")
                 st.rerun()
             else:
-                detail_analysis = detail_matches.iloc[0]
-            
-            with st.container():
-                st.markdown("---")
-                col1, col2, col3 = st.columns([1, 3, 1])
-                with col2:
-                    st.markdown(f"### 📊 Analysis Details: {detail_analysis['name']}")
-                    
-                    # Financial Summary
-                    st.markdown("#### 💰 Financial Summary")
-                    fin_col1, fin_col2 = st.columns(2)
-                    
-                    with fin_col1:
-                        st.metric("Start Cash", f"${detail_analysis['start_cash']:,.2f}")
-                        st.metric("Start Equity", f"${detail_analysis['start_equity_value']:,.2f}")
-                        st.metric("Start Total", f"${detail_analysis['start_total_value']:,.2f}")
-                    
-                    with fin_col2:
-                        st.metric("End Cash", f"${detail_analysis['end_cash']:,.2f}")
-                        st.metric("End Equity", f"${detail_analysis['end_equity_value']:,.2f}", 
-                                 delta=f"{detail_analysis['total_equity_gain_loss']:,.2f}")
-                        st.metric("End Total", f"${detail_analysis['end_total_value']:,.2f}",
-                                 delta=f"{detail_analysis['total_value_gain_loss']:,.2f}")
-                    
-                    # Performance Metrics
-                    st.markdown("#### 📈 Performance Metrics")
-                    perf_col1, perf_col2, perf_col3 = st.columns(3)
-                    
-                    with perf_col1:
-                        total_return_pct = (detail_analysis['total_value_gain_loss'] / detail_analysis['start_total_value'] * 100) if detail_analysis['start_total_value'] > 0 else 0
-                        st.metric("Total Return", f"{total_return_pct:.2f}%")
-                    
-                    with perf_col2:
-                        equity_return_pct = (detail_analysis['total_equity_gain_loss'] / detail_analysis['start_equity_value'] * 100) if detail_analysis['start_equity_value'] > 0 else 0
-                        st.metric("Equity Return", f"{equity_return_pct:.2f}%")
-                    
-                    with perf_col3:
-                        analysis_days = (detail_analysis['end_date'] - detail_analysis['start_date']).days
-                        st.metric("Analysis Period", f"{analysis_days} days")
-                    
-                    # Position Details
-                    st.markdown("#### 🏢 Position Details")
-                    positions_df = st.session_state.portfolio_analysis_manager.get_current_positions(detail_analysis['id'])
-                    
-                    if not positions_df.empty:
-                        # Format the positions for display
-                        display_positions = []
-                        for _, pos in positions_df.iterrows():
-                            market_value = pos['current_quantity'] * pos['current_price'] if pd.notna(pos['current_price']) else 0
-                            cost_basis = pos['current_quantity'] * pos['avg_cost'] if pd.notna(pos['avg_cost']) else 0
-                            pnl = market_value - cost_basis
-                            
-                            display_positions.append({
-                                'Symbol': pos['symbol'],
-                                'Company': pos['company_name'][:30] + "..." if len(str(pos['company_name'])) > 30 else pos['company_name'],
-                                'Quantity': f"{pos['current_quantity']:,}",
-                                'Avg Cost': f"${pos['avg_cost']:.2f}" if pd.notna(pos['avg_cost']) else "-",
-                                'Current Price': f"${pos['current_price']:.2f}" if pd.notna(pos['current_price']) else "-",
-                                'Market Value': f"${market_value:,.2f}",
-                                'P&L': f"${pnl:+,.2f}"
-                            })
-                        
-                        st.dataframe(pd.DataFrame(display_positions), use_container_width=True, hide_index=True)
-                    else:
-                        st.info("No position data available for this analysis")
-                    
-                    # Close button
-                    if st.button("✖️ Close", key="close_detail_modal"):
-                        st.session_state.show_detail_modal = None
-                        st.rerun()
-                
-                st.markdown("---")
+                st.info("Same portfolio already selected")
+    
+    with col_refresh:
+        if st.button("🔄 Refresh"):
+            st.session_state.current_analysis = None
+            st.rerun()
+    
+    # Display currently selected portfolio info
+    st.info(f"📊 **Currently Analyzing:** {current_portfolio['name']} ({selected_portfolio}) | {len([p for p in current_portfolio['positions'] if p['quantity'] > 0])} active positions")
+    
+    st.markdown("---")
+    
+    # Create tabs for different views  
+    pv_tab1, pv_tab2 = st.tabs(["📈 Create New Analysis", "📁 Load Previous Analysis"])
+    
+    with pv_tab1:
+        st.markdown(f"### 📊 Portfolio Analysis for: {current_portfolio['name']}")
         
-        # Transaction Modal
-        if st.session_state.show_transaction_modal:
-            trans_matches = analyses_df[analyses_df['id'] == st.session_state.show_transaction_modal]
-            if trans_matches.empty:
-                # Analysis not found in current portfolio - clear modal state
-                st.session_state.show_transaction_modal = None
-                st.rerun()
-            else:
-                trans_analysis = trans_matches.iloc[0]
-            
-            with st.container():
-                st.markdown("---")
-                col1, col2, col3 = st.columns([1, 3, 1])
-                with col2:
-                    st.markdown(f"### 📝 Transaction History: {trans_analysis['name']}")
-                    
-                    # Get transactions for this analysis
-                    transactions_df = st.session_state.portfolio_analysis_manager.get_analysis_transactions(st.session_state.show_transaction_modal)
-                    
-                    if not transactions_df.empty:
-                        # Format transactions for better display
-                        display_transactions = []
-                        for _, txn in transactions_df.iterrows():
-                            display_transactions.append({
-                                'Date': txn['transaction_date'].strftime('%Y-%m-%d') if pd.notna(txn['transaction_date']) else '-',
-                                'Type': txn['transaction_type'],
-                                'Symbol': txn['symbol'],
-                                'Quantity': f"{txn['quantity_change']:+,}",
-                                'Price/Share': f"${txn['price_per_share']:.3f}" if pd.notna(txn['price_per_share']) else '-',
-                                'Cash Change': f"${txn['cash_change']:+,.2f}" if pd.notna(txn['cash_change']) else '-',
-                                'Notes': txn['notes'][:50] + "..." if len(str(txn['notes'])) > 50 else str(txn['notes'])
-                            })
-                        
-                        st.dataframe(pd.DataFrame(display_transactions), use_container_width=True, hide_index=True)
-                    else:
-                        st.info("No transactions found for this analysis")
-                    
-                    # Close button
-                    if st.button("✖️ Close", key="close_transaction_modal"):
-                        st.session_state.show_transaction_modal = None
-                        st.rerun()
-                
-                st.markdown("---")
+        # Date selection controls
+        col1, col2, col3 = st.columns([2, 2, 1])
         
-        # Analysis Actions Section (simplified since transactions are now in modals)
-        st.markdown("---")
-        col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔄 Refresh Table"):
-                st.rerun()
-        with col2:
-            st.info("💡 Use Detail and Transaction buttons in the table above")
+            start_date = st.date_input(
+                "Analysis Start Date",
+                value=date.today() - timedelta(days=180),  # Default 6 months ago
+                max_value=date.today(),
+                help="Select the start date for portfolio analysis"
+            )
         
-        # Comparison Chart Section
-        if st.session_state.selected_for_compare:
-            st.markdown("---")
-            st.markdown(f"### 📈 Portfolio Performance Comparison ({len(st.session_state.selected_for_compare)} analyses)")
+        with col2:
+            end_date = st.date_input(
+                "Analysis End Date", 
+                value=date.today(),
+                max_value=date.today(),
+                help="Select the end date for portfolio analysis"
+            )
+        
+        with col3:
+            cash_amount = st.number_input(
+                "Cash Amount (HKD)",
+                min_value=0.0,
+                value=0.0,
+                step=10000.0,
+                help="Cash component of portfolio"
+            )
+        
+        # Validate dates
+        if start_date and end_date:
+            is_valid, message, adj_start, adj_end = validate_hkex_analysis_period(start_date, end_date)
             
-            # Initialize price data cache for better performance
-            if 'price_data_cache' not in st.session_state:
-                st.session_state.price_data_cache = {}
-                st.session_state.cache_expiry = {}
-            
-            # Get timeline data for selected analyses with caching
-            cache_key = f"timeline_{sorted(st.session_state.selected_for_compare)}"
-            current_time = time.time()
-            cache_duration = 300  # 5 minutes cache
-            
-            # Check if we have cached data that's still valid
-            if (cache_key in st.session_state.price_data_cache and 
-                cache_key in st.session_state.cache_expiry and
-                current_time - st.session_state.cache_expiry[cache_key] < cache_duration):
-                
-                timeline_df = st.session_state.price_data_cache[cache_key]
-                st.info("📊 Using cached data for faster display")
+            if not is_valid:
+                st.error(f"❌ {message}")
             else:
-                # Fetch fresh data and cache it
-                with st.spinner("📈 Fetching real-time market data..."):
-                    timeline_df = st.session_state.portfolio_analysis_manager.get_analysis_timeline_data(st.session_state.selected_for_compare)
-                    
-                    # Cache the results
-                    st.session_state.price_data_cache[cache_key] = timeline_df
-                    st.session_state.cache_expiry[cache_key] = current_time
-                    
-                    if not timeline_df.empty:
-                        st.success("✅ Market data fetched successfully")
-            
-            if not timeline_df.empty:
-                # Create comparison chart
-                fig = go.Figure()
+                if adj_start != start_date or adj_end != end_date:
+                    st.info(f"ℹ️ {message}")
                 
-                # Add trace for each analysis
-                for analysis_id in st.session_state.selected_for_compare:
-                    analysis_data = timeline_df[timeline_df['analysis_id'] == analysis_id]
-                    if not analysis_data.empty:
-                        analysis_name = analysis_data.iloc[0]['analysis_name']
-                        
-                        # Create hover text with detailed information
-                        hover_text = []
-                        for _, point in analysis_data.iterrows():
-                            hover_info = f"<b>{analysis_name}</b><br>"
-                            hover_info += f"Date: {point['date'].strftime('%Y-%m-%d')}<br>"
-                            hover_info += f"Total Value: ${point['total_value']:,.2f}<br>"
-                            hover_info += f"Cash: ${point['cash_position']:,.2f}<br>"
-                            hover_info += f"Equity: ${point['equity_value']:,.2f}"
-                            if point['transaction_details']:
-                                hover_info += f"<br>Transactions: {point['transaction_details']}"
-                            hover_text.append(hover_info)
-                        
-                        fig.add_trace(go.Scatter(
-                            x=analysis_data['date'],
-                            y=analysis_data['total_value'],
-                            mode='lines+markers',
-                            name=analysis_name,
-                            hovertemplate='%{hovertext}<extra></extra>',
-                            hovertext=hover_text,
-                            line=dict(width=2),
-                            marker=dict(size=4)
-                        ))
-                
-                # Update layout
-                fig.update_layout(
-                    title="Portfolio Total Value Over Time",
-                    xaxis_title="Date",
-                    yaxis_title="Total Value (HKD)",
-                    height=500,
-                    showlegend=True,
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1
-                    ),
-                    hovermode='x unified'
-                )
-                
-                # Format y-axis as currency
-                fig.update_layout(yaxis=dict(tickformat='$,.0f'))
-                
-                # Display chart
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Portfolio Analysis Summary - Interactive equity analysis
-                st.markdown("---")
-                st.markdown("### 📈 Portfolio Analysis Summary")
-                
-                # Initialize selected analysis and date
-                if 'selected_analysis_date' not in st.session_state:
-                    st.session_state.selected_analysis_date = None
-                if 'selected_analysis_id' not in st.session_state:
-                    st.session_state.selected_analysis_id = None
-                
-                # Analysis and Date Selection
-                col1, col2, col3 = st.columns([2, 2, 1])
+                # Analysis controls
+                col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
-                    # Select analysis for detailed view
-                    analysis_options = [(row['id'], row['name']) for _, row in analyses_df.iterrows() if row['id'] in st.session_state.selected_for_compare]
-                    if analysis_options:
-                        selected_option = st.selectbox(
-                            "Select Analysis for Details:",
-                            options=analysis_options,
-                            format_func=lambda x: x[1],
-                            key="analysis_detail_selector"
-                        )
-                        st.session_state.selected_analysis_id = selected_option[0] if selected_option else None
+                    analysis_name = st.text_input(
+                        "Analysis Name",
+                        value=f"{selected_portfolio} PV Analysis {adj_start} to {adj_end}",
+                        help="Name for this analysis (required if saving)"
+                    )
                 
                 with col2:
-                    # Select date within analysis period
-                    if st.session_state.selected_analysis_id:
-                        analysis_matches = analyses_df[analyses_df['id'] == st.session_state.selected_analysis_id]
-                        if analysis_matches.empty:
-                            # Analysis not found in current portfolio - clear selection
-                            st.session_state.selected_analysis_id = None
-                            st.warning("Selected analysis not found in current portfolio. Please select a different analysis.")
-                        else:
-                            selected_analysis = analysis_matches.iloc[0]
-                            start_date = selected_analysis['start_date']
-                            end_date = selected_analysis['end_date']
-                            
-                            selected_date = st.date_input(
-                                "Select Date for Analysis:",
-                                value=end_date,
-                                min_value=start_date,
-                                max_value=end_date,
-                                key="analysis_date_selector"
-                            )
-                            st.session_state.selected_analysis_date = selected_date
+                    save_analysis = st.checkbox(
+                        "Save Analysis",
+                        value=True,
+                        help="Save this analysis for future reference"
+                    )
                 
                 with col3:
-                    if st.button("🔄 Refresh Chart"):
-                        if 'price_data_cache' in st.session_state:
-                            st.session_state.price_data_cache.clear()
-                            st.session_state.cache_expiry.clear()
-                        st.rerun()
+                    run_analysis = st.button(
+                        "🚀 Run Analysis",
+                        type="primary",
+                        help="Calculate portfolio value for the selected period"
+                    )
                 
-                # Show equity analysis for selected analysis and date
-                if st.session_state.selected_analysis_id and st.session_state.selected_analysis_date:
-                    st.markdown(f"#### 🏢 Equity Analysis - {selected_analysis['name']} ({st.session_state.selected_analysis_date})")
-                    
-                    # Get positions for the selected analysis
-                    positions_df = st.session_state.portfolio_analysis_manager.get_current_positions(st.session_state.selected_analysis_id)
-                    
-                    if not positions_df.empty:
-                        # Initialize technical modal state
-                        if 'show_technical_modal' not in st.session_state:
-                            st.session_state.show_technical_modal = None
-                        
-                        # Create equity analysis table with the requested format
-                        equity_data = []
-                        data_sources = []  # Track data sources for user feedback
-                        
-                        for _, pos in positions_df.iterrows():
-                            symbol = pos['symbol']
-                            
-                            # Fetch real OHLCV data for the selected date
-                            price_data = fetch_equity_prices_by_date(symbol, st.session_state.selected_analysis_date)
-                            
-                            # Format the data for display
-                            open_price = price_data.get('open_price')
-                            close_price = price_data.get('close_price')
-                            volume = price_data.get('volume')
-                            data_source = price_data.get('data_source', 'unknown')
-                            
-                            equity_data.append({
-                                'Symbol': symbol,
-                                'Company': pos['company_name'][:25] + "..." if len(str(pos['company_name'])) > 25 else pos['company_name'],
-                                'Qty': f"{pos['current_quantity']:,}",
-                                'Open': f"${open_price:,.2f}" if open_price else "-",
-                                'Close': f"${close_price:,.2f}" if close_price else "-",
-                                'Volume': f"{volume:,}" if volume else "-",
-                                'Detail': symbol  # Will be used for detail button
-                            })
-                            
-                            # Track data source for feedback
-                            data_sources.append(f"{symbol}: {data_source}")
-                        
-                        # Display the equity table
-                        if equity_data:
-                            # Show data source information
-                            unique_sources = set([source.split(': ')[1] for source in data_sources])
-                            source_info = {
-                                'database_exact': '📊 Database (exact date)',
-                                'database_nearest': '📊 Database (nearest date)', 
-                                'yahoo_exact': '🌐 Yahoo Finance (exact date)',
-                                'yahoo_nearest': '🌐 Yahoo Finance (nearest date)',
-                                'mock_fallback': '⚠️ Mock data (fallback)'
-                            }
-                            
-                            source_text = ", ".join([source_info.get(src, src) for src in unique_sources])
-                            st.caption(f"**Data Sources:** {source_text}")
-                            
-                            # Create custom table layout for the Detail button
-                            header_cols = st.columns([1, 3, 1, 1.2, 1.2, 1.5, 1])
-                            headers = ['Symbol', 'Company', 'Qty', 'Open', 'Close', 'Volume', 'Detail']
-                            for i, (col, header) in enumerate(zip(header_cols, headers)):
-                                with col:
-                                    st.markdown(f"**{header}**")
-                            
-                            st.markdown("---")
-                            
-                            # Table rows
-                            for equity in equity_data:
-                                row_cols = st.columns([1, 3, 1, 1.2, 1.2, 1.5, 1])
-                                
-                                with row_cols[0]:
-                                    st.write(equity['Symbol'])
-                                with row_cols[1]:
-                                    st.write(equity['Company'])
-                                with row_cols[2]:
-                                    st.write(equity['Qty'])
-                                with row_cols[3]:
-                                    st.write(equity['Open'])
-                                with row_cols[4]:
-                                    st.write(equity['Close'])
-                                with row_cols[5]:
-                                    st.write(equity['Volume'])
-                                with row_cols[6]:
-                                    if st.button("📈", key=f"tech_{equity['Symbol']}", help=f"Technical analysis for {equity['Symbol']}"):
-                                        st.session_state.show_technical_modal = equity['Symbol']
-                                        st.rerun()
-                        
-                        # Technical Analysis Modal
-                        if st.session_state.show_technical_modal:
-                            symbol = st.session_state.show_technical_modal
-                            
-                            with st.container():
-                                st.markdown("---")
-                                col1, col2, col3 = st.columns([1, 3, 1])
-                                with col2:
-                                    st.markdown(f"### 📊 Technical Analysis: {symbol}")
-                                    
-                                    # Fetch real technical data from database
-                                    tech_data = fetch_technical_analysis_data(symbol)
-                                    tech_col1, tech_col2, tech_col3 = st.columns(3)
-                                    
-                                    with tech_col1:
-                                        st.metric("Day High", f"${tech_data['day_high']:.2f}" if tech_data['day_high'] else "N/A")
-                                        st.metric("Day Low", f"${tech_data['day_low']:.2f}" if tech_data['day_low'] else "N/A")
-                                        st.metric("52-Week High", f"${tech_data['week_52_high']:.2f}" if tech_data['week_52_high'] else "N/A")
-                                        st.metric("52-Week Low", f"${tech_data['week_52_low']:.2f}" if tech_data['week_52_low'] else "N/A")
-                                    
-                                    with tech_col2:
-                                        st.metric("RSI (14)", f"{tech_data['rsi_14']:.1f}" if tech_data['rsi_14'] else "N/A")
-                                        st.metric("EMA (12)", f"${tech_data['ema_12']:.2f}" if tech_data['ema_12'] else "N/A")
-                                        st.metric("EMA (26)", f"${tech_data['ema_26']:.2f}" if tech_data['ema_26'] else "N/A")
-                                        st.metric("SMA (20)", f"${tech_data['sma_20']:.2f}" if tech_data['sma_20'] else "N/A")
-                                    
-                                    with tech_col3:
-                                        st.metric("MACD", f"{tech_data['macd']:.2f}" if tech_data['macd'] else "N/A")
-                                        st.metric("Volume Ratio", f"{tech_data['volume_ratio']:.2f}" if tech_data['volume_ratio'] else "N/A")
-                                        st.metric("ATR (14)", f"${tech_data['atr_14']:.2f}" if tech_data['atr_14'] else "N/A")
-                                        st.metric("Support", f"${tech_data['support_level']:.2f}" if tech_data['support_level'] else "N/A")
-                                    
-                                    # Show data source and date
-                                    if tech_data['trade_date']:
-                                        st.caption(f"Data as of: {tech_data['trade_date']}")
-                                    else:
-                                        st.caption("Data source: Yahoo Finance (Live)")
-                                        
-                                    # Add some sample technical data to database for demo
-                                    if st.button("📊 Load Sample Technical Data", key="load_sample_tech", help="Add sample technical indicators to database for demonstration"):
-                                        load_sample_technical_data()
-                                    
-                                    # Close button
-                                    if st.button("✖️ Close Technical Analysis", key="close_technical_modal"):
-                                        st.session_state.show_technical_modal = None
-                                        st.rerun()
-                                
-                                st.markdown("---")
+                # Run analysis when button is clicked
+                if run_analysis:
+                    if save_analysis and not analysis_name.strip():
+                        st.error("Please provide an analysis name to save the results.")
                     else:
-                        st.info("No equity positions found for selected analysis")
-                else:
-                    st.info("💡 Select an analysis and date above to view detailed equity breakdown")
+                        with st.spinner("Running portfolio analysis..."):
+                            try:
+                                # Get portfolio positions 
+                                portfolio_positions = current_portfolio['positions']
+                                positions = {}
+                                
+                                for pos in portfolio_positions:
+                                    if pos['quantity'] > 0:  # Only include positions with quantity > 0
+                                        positions[pos['symbol']] = pos['quantity']
+                                
+                                if not positions:
+                                    st.error("No active positions found in this portfolio.")
+                                else:
+                                    # Create analysis
+                                    analysis_id, daily_values_df, metrics = st.session_state.analysis_manager.create_analysis(
+                                        name=analysis_name,
+                                        start_date=adj_start,
+                                        end_date=adj_end,
+                                        positions=positions,
+                                        cash_amount=cash_amount,
+                                        save_analysis=save_analysis
+                                    )
+                                    
+                                    # Store results in session state for display
+                                    st.session_state.current_analysis = {
+                                        'id': analysis_id,
+                                        'name': analysis_name,
+                                        'daily_values': daily_values_df,
+                                        'metrics': metrics,
+                                        'start_date': adj_start,
+                                        'end_date': adj_end,
+                                        'cash_amount': cash_amount,
+                                        'portfolio_name': selected_portfolio
+                                    }
+                                    
+                                    st.success(f"✅ Analysis completed! {len(daily_values_df)} trading days analyzed.")
+                                    if save_analysis:
+                                        if analysis_id:
+                                            st.success(f"📁 Analysis saved with ID: {analysis_id}")
+                                        else:
+                                            st.warning("⚠️ Analysis completed but could not be saved to database. Results are available for viewing.")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Error running analysis: {str(e)}")
+                                import traceback
+                                st.expander("Error Details").code(traceback.format_exc())
+    
+    with pv_tab2:
+        # Load previous analysis
+        st.markdown("### 📁 Load Portfolio Analysis")
+        st.markdown("Select a previously saved analysis to view its results and continue working with it.")
+        
+        # Get list of saved analyses
+        saved_analyses = st.session_state.db_manager.get_portfolio_analyses(limit=20)
+        
+        if saved_analyses.empty:
+            st.info("No saved analyses found. Create a new analysis in the first tab.")
+        else:
+            # Format analysis list for display
+            analysis_options = []
+            for _, row in saved_analyses.iterrows():
+                return_pct = row['total_return'] * 100
+                analysis_options.append(
+                    f"ID {row['id']}: {row['name']} ({row['start_date']} to {row['end_date']}) - {return_pct:+.2f}%"
+                )
+            
+            selected_analysis = st.selectbox(
+                "Select Analysis to Load:",
+                options=range(len(analysis_options)),
+                format_func=lambda x: analysis_options[x],
+                help="Select a previously saved analysis to view"
+            )
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                load_analysis = st.button("📁 Load Portfolio Analysis", type="primary", use_container_width=True)
+            
+            with col2:
+                if st.button("🗑️ Delete Selected", help="Delete the selected analysis"):
+                    analysis_id = int(saved_analyses.iloc[selected_analysis]['id'])
+                    if st.session_state.db_manager.delete_portfolio_analysis(analysis_id):
+                        st.success("✅ Analysis deleted successfully!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to delete analysis.")
+            
+            # Load selected analysis
+            if load_analysis:
+                analysis_id = int(saved_analyses.iloc[selected_analysis]['id'])
                 
-                # Clear selections button
-                if st.button("❌ Clear All Chart Selections"):
-                    st.session_state.selected_for_compare = []
-                    st.rerun()
-            else:
-                st.warning("No data available for selected analyses")
+                with st.spinner("Loading analysis..."):
+                    try:
+                        analysis_info, daily_values_df, metrics = st.session_state.analysis_manager.load_analysis(analysis_id)
+                        
+                        # Store results in session state for display
+                        st.session_state.current_analysis = {
+                            'id': analysis_id,
+                            'name': analysis_info['name'],
+                            'daily_values': daily_values_df,
+                            'metrics': metrics,
+                            'start_date': analysis_info['start_date'],
+                            'end_date': analysis_info['end_date'],
+                            'cash_amount': 0.0,
+                            'created_at': analysis_info['created_at'],
+                            'portfolio_name': selected_portfolio
+                        }
+                        
+                        st.success(f"✅ Loaded analysis: {analysis_info['name']}")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error loading analysis: {str(e)}")
+    
+    # Display current analysis results if available
+    if 'current_analysis' in st.session_state and st.session_state.current_analysis:
+        analysis = st.session_state.current_analysis
+        daily_values_df = analysis['daily_values']
+        metrics = analysis['metrics']
+        
+        st.markdown("---")
+        st.markdown(f"<h5 style='margin-bottom: 8px;'>📈 {analysis['name']}</h5>", unsafe_allow_html=True)
+        
+        # Custom CSS for compact PV Analysis metrics
+        st.markdown("""
+        <style>
+        .pv-metric-container {
+            padding: 6px;
+            border-radius: 4px;
+            text-align: center;
+            margin: 1px;
+        }
+        .pv-metric-label {
+            font-size: 10px;
+            color: #8e8ea0;
+            margin-bottom: 1px;
+        }
+        .pv-metric-value {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 0px;
+        }
+        .pv-metric-delta {
+            font-size: 9px;
+            margin-top: 0px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Display compact KPIs above chart
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.markdown(f"""
+            <div class="pv-metric-container">
+                <div class="pv-metric-label">Start PV</div>
+                <div class="pv-metric-value">HK${metrics.start_value:,.0f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            delta_color = "#00ff00" if metrics.total_return >= 0 else "#ff4444"
+            st.markdown(f"""
+            <div class="pv-metric-container">
+                <div class="pv-metric-label">End PV</div>
+                <div class="pv-metric-value">HK${metrics.end_value:,.0f}</div>
+                <div class="pv-metric-delta" style="color: {delta_color};">HK${metrics.total_return:+,.0f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            return_color = "#00ff00" if metrics.total_return_pct >= 0 else "#ff4444"
+            st.markdown(f"""
+            <div class="pv-metric-container">
+                <div class="pv-metric-label">Total Return</div>
+                <div class="pv-metric-value" style="color: {return_color};">{metrics.total_return_pct:+.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+            <div class="pv-metric-container">
+                <div class="pv-metric-label">Max Drawdown</div>
+                <div class="pv-metric-value" style="color: #ff4444;">{metrics.max_drawdown_pct:.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown(f"""
+            <div class="pv-metric-container">
+                <div class="pv-metric-label">Volatility</div>
+                <div class="pv-metric-value">{metrics.volatility:.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Create interactive PV chart
+        fig = go.Figure()
+        
+        # Prepare hover data with daily changes and contributors
+        hover_texts = []
+        for _, row in daily_values_df.iterrows():
+            hover_text = f"<b>{row['trade_date']}</b><br>"
+            hover_text += f"Portfolio Value: HK${row['total_value']:,.0f}<br>"
+            
+            if pd.notna(row['daily_change']):
+                hover_text += f"Daily Change: HK${row['daily_change']:+,.0f}<br>"
+            
+            if pd.notna(row['daily_return']):
+                hover_text += f"Daily Return: {row['daily_return']*100:+.2f}%<br>"
+            
+            # Add top contributors
+            if row['top_contributors'] and len(row['top_contributors']) > 0:
+                hover_text += "<br><b>Top Contributors:</b><br>"
+                for i, contrib in enumerate(row['top_contributors'][:3]):  # Show top 3
+                    hover_text += f"• {contrib['symbol']}: HK${contrib['contribution']:+,.0f}<br>"
+            
+            hover_texts.append(hover_text)
+        
+        # Portfolio Value line
+        fig.add_trace(go.Scatter(
+            x=daily_values_df['trade_date'],
+            y=daily_values_df['total_value'],
+            mode='lines',
+            name='Portfolio Value',
+            line=dict(color='#1f77b4', width=2),
+            hovertemplate='%{text}<extra></extra>',
+            text=hover_texts
+        ))
+        
+        # Add cash line if cash component exists
+        if analysis['cash_amount'] > 0:
+            fig.add_trace(go.Scatter(
+                x=daily_values_df['trade_date'],
+                y=daily_values_df['cash_value'],
+                mode='lines',
+                name='Cash',
+                line=dict(color='green', width=1, dash='dash'),
+                hovertemplate='<b>%{x}</b><br>' +
+                             'Cash Value: HK$%{y:,.0f}<br>' +
+                             '<extra></extra>'
+            ))
+        
+        # Customize chart layout with compact title
+        fig.update_layout(
+            title={
+                'text': f"Portfolio Value Chart - {analysis['portfolio_name']} ({analysis['start_date']} to {analysis['end_date']})",
+                'font': {'size': 14},
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            xaxis_title="Date",
+            yaxis_title="Value (HKD)",
+            hovermode='x unified',
+            showlegend=True,
+            height=500,
+            margin=dict(t=40)  # Reduce top margin for compact layout
+        )
+        
+        # Format y-axis
+        fig.update_yaxes(tickformat=',.0f')
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Additional analysis details
+        with st.expander("📊 Detailed Analysis", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Performance Summary:**")
+                
+                # Trading Days
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• Trading Days: {metrics.trading_days}")
+                with col1b:
+                    st.markdown("ℹ️", help="Number of actual HKEX trading days in the analysis period")
+                
+                # Start Value
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• Start Value: HK${metrics.start_value:,.0f}")
+                with col1b:
+                    st.markdown("ℹ️", help="Total portfolio value on the first trading day of the analysis period")
+                
+                # End Value
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• End Value: HK${metrics.end_value:,.0f}")
+                with col1b:
+                    st.markdown("ℹ️", help="Total portfolio value on the last trading day of the analysis period")
+                
+                # Absolute P&L
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• Absolute P&L: HK${metrics.total_return:+,.0f}")
+                with col1b:
+                    st.markdown("ℹ️", help="Total profit/loss in HK$ (End Value - Start Value)")
+                
+                # Return %
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• Return %: {metrics.total_return_pct:+.2f}%")
+                with col1b:
+                    st.markdown("ℹ️", help="Percentage return calculated as (End Value - Start Value) / Start Value × 100")
+                
+                # Max Drawdown
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• Max Drawdown: {metrics.max_drawdown_pct:.2f}%")
+                with col1b:
+                    st.markdown("ℹ️", help="Maximum peak-to-trough decline during the period, expressed as percentage")
+                
+                # Volatility
+                col1a, col1b = st.columns([3, 1])
+                with col1a:
+                    st.write(f"• Volatility: {metrics.volatility:.2f}%")
+                with col1b:
+                    st.markdown("ℹ️", help="Annualized standard deviation of daily returns (252 trading days per year)")
+                
+                # Sharpe Ratio
+                if metrics.sharpe_ratio:
+                    col1a, col1b = st.columns([3, 1])
+                    with col1a:
+                        st.write(f"• Sharpe Ratio: {metrics.sharpe_ratio:.3f}")
+                    with col1b:
+                        st.markdown("ℹ️", help="Risk-adjusted return measure: (Portfolio Return - Risk-free Rate) / Volatility")
+            
+            with col2:
+                st.write("**Best & Worst Days:**")
+                
+                # Best Day
+                col2a, col2b = st.columns([3, 1])
+                with col2a:
+                    st.write(f"• Best Day: {metrics.best_day[0]} (+HK${metrics.best_day[1]:,.0f})")
+                with col2b:
+                    st.markdown("ℹ️", help="Trading day with the largest positive change in portfolio value")
+                
+                # Worst Day
+                col2a, col2b = st.columns([3, 1])
+                with col2a:
+                    st.write(f"• Worst Day: {metrics.worst_day[0]} (HK${metrics.worst_day[1]:,.0f})")
+                with col2b:
+                    st.markdown("ℹ️", help="Trading day with the largest negative change in portfolio value")
+                
+                # Show recent top contributors
+                if not daily_values_df.empty and daily_values_df.iloc[-1]['top_contributors']:
+                    st.write("**Recent Top Contributors:**")
+                    st.markdown("ℹ️ *Top 3 stocks that contributed most to the last trading day's change*", help="Shows which positions had the biggest impact on the most recent day's portfolio change")
+                    for contrib in daily_values_df.iloc[-1]['top_contributors']:
+                        st.write(f"• {contrib['symbol']}: HK${contrib['contribution']:+,.0f} ({contrib['contribution_pct']:+.1f}%)")
+        
+        # Add Strategy Analysis Trigger Button
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🎯 Analyze Strategy Performance", type="primary", use_container_width=True):
+                # Store current analysis context for strategy analysis
+                st.session_state.navigation['context']['source_analysis'] = analysis
+                st.session_state.current_page = 'equity_analysis'
+                st.session_state.navigation['section'] = 'strategy'
+                st.session_state.navigation['page'] = 'equity_analysis'
+                st.success("🚀 Launching Equity Strategy Analysis...")
+                st.rerun()
+
+# Strategy Analysis Dashboard Pages (New)
 elif st.session_state.current_page == 'equity_analysis':
     # Equity Strategy Analysis Dashboard
     st.subheader("📈 Equity Strategy Analysis")
@@ -3016,21 +2243,14 @@ elif st.session_state.current_page == 'overview':
     # All Portfolios Overview Page
     st.subheader("📋 All Portfolios Management")
     
-    
     # Portfolio Statistics
     total_portfolios = len(st.session_state.portfolios)
     
-    # FIXED: Count unique symbols only (not duplicate positions across portfolios)
+    # Debug breakdown of position counting
     debug_info = []
-    all_positions_count = 0  # Keep for debug info - total position entries
-    active_positions_count = 0  # Keep for debug info - active position entries
+    all_positions_count = 0
+    active_positions_count = 0
     inactive_positions_count = 0
-    
-    # Collect unique symbols with details across all portfolios
-    all_unique_symbols = set()
-    active_unique_symbols = set()
-    all_symbol_details = {}  # {symbol: {company_name, sector}}
-    active_symbol_details = {}  # {symbol: {company_name, sector}}
     
     for portfolio_id, portfolio_data in st.session_state.portfolios.items():
         portfolio_total = len(portfolio_data['positions'])
@@ -3041,30 +2261,9 @@ elif st.session_state.current_page == 'overview':
         all_positions_count += portfolio_total
         active_positions_count += portfolio_active
         inactive_positions_count += portfolio_inactive
-        
-        # Add unique symbols with details
-        for pos in portfolio_data['positions']:
-            symbol = pos['symbol']
-            all_unique_symbols.add(symbol)
-            
-            # Store symbol details (use first occurrence if symbol appears in multiple portfolios)
-            if symbol not in all_symbol_details:
-                all_symbol_details[symbol] = {
-                    'company_name': pos.get('company_name', 'Unknown'),
-                    'sector': pos.get('sector', 'Other')
-                }
-            
-            if pos['quantity'] > 0:
-                active_unique_symbols.add(symbol)
-                if symbol not in active_symbol_details:
-                    active_symbol_details[symbol] = {
-                        'company_name': pos.get('company_name', 'Unknown'),
-                        'sector': pos.get('sector', 'Other')
-                    }
     
-    # Use unique symbol counts for display metrics
-    total_positions = len(all_unique_symbols)
-    active_positions = len(active_unique_symbols)
+    total_positions = all_positions_count
+    active_positions = active_positions_count
     
     # Show debug info in an expander for troubleshooting
     with st.expander("📊 Position Count Breakdown (Debug)", expanded=False):
@@ -3076,10 +2275,12 @@ elif st.session_state.current_page == 'overview':
         st.write(f"- Active Positions: {active_positions_count}")
         st.write(f"- Inactive Positions (qty=0): {inactive_positions_count}")
         
-        # Show the difference between old method (position entries) and new method (unique symbols)
-        st.write(f"- **NEW METHOD (Displayed Above):** Unique Symbols: {len(all_unique_symbols)} total, {len(active_unique_symbols)} active")
-        st.write(f"- **OLD METHOD:** Position Entries: {all_positions_count} total, {active_positions_count} active")
-        st.write(f"- **Difference:** The new method eliminates duplicate symbols across portfolios")
+        # Check for unique symbols across all portfolios
+        all_symbols = set()
+        for p in st.session_state.portfolios.values():
+            for pos in p['positions']:
+                all_symbols.add(pos['symbol'])
+        st.write(f"- Unique Symbols Across All Portfolios: {len(all_symbols)}")
         
         st.markdown("---")
         st.write("**Expected vs Actual:**")
@@ -3087,59 +2288,13 @@ elif st.session_state.current_page == 'overview':
         st.write(f"- Actual calculation shows: {all_positions_count} total positions")
         st.write(f"- This suggests some positions have quantity = 0 or there are fewer positions than expected")
     
-    # Custom CSS for clickable metrics
-    st.markdown("""
-    <style>
-    .clickable-metric {
-        background: white;
-        border: 1px solid #d4d4d4;
-        border-radius: 4px;
-        padding: 1rem;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        height: 100px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-    }
-    .clickable-metric:hover {
-        background: #f8f9fa;
-        border-color: #007bff;
-        box-shadow: 0 2px 4px rgba(0,123,255,0.1);
-    }
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 600;
-        color: #1f77b4;
-        margin: 0;
-    }
-    .metric-label {
-        font-size: 0.9rem;
-        color: #666;
-        margin: 0.25rem 0 0 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Portfolios", total_portfolios, help="Number of portfolios in your system")
     with col2:
-        # Clickable Total Positions metric
-        if st.button(f"**{total_positions}**\n\nTotal Positions", 
-                    key="total_positions_btn", 
-                    help="Click to view all unique symbols",
-                    use_container_width=True):
-            show_total_positions_dialog(all_symbol_details)
+        st.metric("Total Positions", total_positions, help="Total number of stock positions across all portfolios (includes positions with quantity = 0)")
     with col3:
-        # Clickable Active Positions metric
-        if st.button(f"**{active_positions}**\n\nActive Positions", 
-                    key="active_positions_btn", 
-                    help="Click to view active symbols only",
-                    use_container_width=True):
-            show_active_positions_dialog(active_symbol_details)
+        st.metric("Active Positions", active_positions, help="Number of positions with quantity > 0 (stocks you currently hold)")
     
     st.markdown("---")
     
@@ -3187,13 +2342,8 @@ elif st.session_state.current_page == 'overview':
         })
     
     if overview_data:
-        # Enhanced Interactive Table with Action Buttons and Create Button
-        table_header_col1, table_header_col2 = st.columns([3, 1])
-        with table_header_col1:
-            st.markdown("### 📋 Interactive Portfolio Table")
-        with table_header_col2:
-            if st.button("➕ Create New Portfolio", type="primary", use_container_width=True):
-                create_portfolio_dialog()
+        # Enhanced Interactive Table with Action Buttons
+        st.markdown("### 📋 Interactive Portfolio Table")
         
         # CSS styling for clickable portfolio names
         st.markdown("""
@@ -3325,6 +2475,61 @@ elif st.session_state.current_page == 'overview':
             # Add separator between rows
             if i < len(overview_data) - 1:
                 st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+        
+        # Simplified Portfolio Actions - Only Create New Portfolio
+        st.markdown("---")
+        st.subheader("🛠️ Portfolio Actions")
+        
+        # Center the create portfolio form
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("**➕ Create New Portfolio**")
+            
+            new_portfolio_id = st.text_input(
+                "Portfolio ID:",
+                placeholder="e.g., TECH_GROWTH",
+                key="new_portfolio_id_overview",
+                help="Unique identifier for the portfolio"
+            )
+            
+            new_portfolio_name = st.text_input(
+                "Portfolio Name:",
+                placeholder="e.g., Technology Growth Portfolio", 
+                key="new_portfolio_name_overview",
+                help="Descriptive name for the portfolio"
+            )
+            
+            new_portfolio_desc = st.text_area(
+                "Description:",
+                placeholder="Portfolio focused on technology growth stocks...",
+                key="new_portfolio_desc_overview",
+                help="Brief description of the portfolio strategy"
+            )
+            
+            if st.button("➕ Create Portfolio", key="create_portfolio_overview_btn", type="primary", use_container_width=True):
+                if new_portfolio_id and new_portfolio_name and new_portfolio_id not in st.session_state.portfolios:
+                    success = st.session_state.portfolio_manager.create_portfolio(
+                        new_portfolio_id, new_portfolio_name, new_portfolio_desc
+                    )
+                    if success:
+                        st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                        st.success(f"✅ Portfolio '{new_portfolio_id}' created successfully!")
+                        
+                        # Automatically switch to edit mode for the new portfolio
+                        st.session_state.current_page = 'portfolio'
+                        # Use portfolio_switch_request to properly select the new portfolio
+                        st.session_state.portfolio_switch_request = new_portfolio_id
+                        st.session_state.edit_mode[new_portfolio_id] = True
+                        st.session_state.portfolio_backup[new_portfolio_id] = copy.deepcopy(st.session_state.portfolios[new_portfolio_id])
+                        # Update navigation state for unified navigation system
+                        st.session_state.navigation['section'] = 'portfolios'
+                        st.session_state.navigation['page'] = 'portfolio'
+                        st.info("🔄 Redirecting to portfolio editor...")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to create portfolio!")
+                else:
+                    st.error("❌ Please provide valid Portfolio ID and Name. Portfolio ID must be unique!")
     
     # Navigation hint
     st.markdown("---")

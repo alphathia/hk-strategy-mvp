@@ -139,11 +139,17 @@ def main():
                         st.error(f"Error generating signals: {str(e)}")
             
             st.subheader("Strategy Configuration")
-            st.write("**Signal Types:**")
-            st.write("• **A**: Strong BUY (Breakout)")
-            st.write("• **B**: Strong BUY (Oversold Reclaim)")  
-            st.write("• **C**: Strong SELL (Breakdown)")
-            st.write("• **D**: Strong TRIM (Overbought)")
+            st.write("**Signal Types (TXYZN Format):**")
+            st.write("• **BBRK9**: Strong BUY - Breakout (Strength: 9)")
+            st.write("• **BRSV7**: Strong BUY - RSI Reversal (Strength: 7)")
+            st.write("• **HMOM5**: HOLD - Neutral Momentum (Strength: 5)")
+            st.write("• **SBRK3**: SELL - Breakdown (Strength: 3)")
+            st.write("• **SOVB1**: SELL - Overbought (Strength: 1)")
+            st.write("")
+            st.write("**Format**: T-XYZ-N where:")
+            st.write("• T: B=Buy, S=Sell, H=Hold")
+            st.write("• XYZ: Strategy (BRK=Breakout, RSV=RSI Reversal, MOM=Momentum, OVB=Overbought)")
+            st.write("• N: Strength (1-9, higher = stronger)")
             
             if st.button("📊 Run Full Strategy Analysis"):
                 with st.spinner("Running comprehensive analysis..."):
@@ -165,24 +171,49 @@ def main():
             
             signal_counts = signals_df['signal_type'].value_counts()
             
+            # Count both new and legacy signal types
+            buy_signals = (signal_counts.get('A', 0) + signal_counts.get('B', 0) + 
+                         signal_counts.get('BBRK9', 0) + signal_counts.get('BRSV7', 0) + 
+                         signal_counts.get('BMOM7', 0) + signal_counts.get('BMOM9', 0))
+            hold_signals = (signal_counts.get('C', 0) + signal_counts.get('HMOM5', 0))
+            sell_signals = (signal_counts.get('D', 0) + signal_counts.get('SBRK3', 0) + 
+                          signal_counts.get('SOVB1', 0) + signal_counts.get('SMOM3', 0))
+            
             with col1:
-                st.metric("A Signals (Strong Buy)", signal_counts.get('A', 0), 
-                         help="High conviction bullish signals")
+                st.metric("Buy Signals", buy_signals, 
+                         help="All bullish signals (BXYZN, A, B)")
             with col2:
-                st.metric("B Signals (Buy)", signal_counts.get('B', 0),
-                         help="Moderate bullish signals") 
+                st.metric("Hold Signals", hold_signals,
+                         help="Neutral signals (HMOM5, C)") 
             with col3:
-                st.metric("C Signals (Hold)", signal_counts.get('C', 0),
-                         help="Neutral/weak signals")
+                st.metric("Sell Signals", sell_signals,
+                         help="All bearish signals (SXYZN, D)")
             with col4:
-                st.metric("D Signals (Sell)", signal_counts.get('D', 0),
-                         help="Bearish signals")
+                total_signals = buy_signals + hold_signals + sell_signals
+                st.metric("Total Signals", total_signals,
+                         help="All signals generated")
             
             st.subheader("Recent Signals")
             
-            # Signal color mapping for A/B/C/D
-            signal_colors = {'A': '#00C851', 'B': '#33B679', 'C': '#FFB300', 'D': '#FF4444'}
+            # Signal color mapping for new TXYZN and legacy A/B/C/D formats
+            signal_colors = {
+                # New TXYZN format
+                'BBRK9': '#00C851', 'BRSV7': '#33B679', 'BMOM7': '#33B679', 'BMOM9': '#00C851',
+                'HMOM5': '#FFB300', 'SBRK3': '#FF4444', 'SOVB1': '#FF4444', 'SMOM3': '#FF4444',
+                # Legacy format
+                'A': '#00C851', 'B': '#33B679', 'C': '#FFB300', 'D': '#FF4444'
+            }
             signal_descriptions = {
+                # New TXYZN format
+                'BBRK9': 'Strong BUY - Breakout above resistance (Strength: 9)',
+                'BRSV7': 'Strong BUY - RSI Reversal recovery (Strength: 7)', 
+                'BMOM7': 'BUY - Moderate momentum signal (Strength: 7)',
+                'BMOM9': 'Strong BUY - High momentum signal (Strength: 9)',
+                'HMOM5': 'HOLD - Neutral momentum signal (Strength: 5)',
+                'SBRK3': 'SELL - Breakdown below support (Strength: 3)',
+                'SOVB1': 'SELL - Overbought reversal (Strength: 1)',
+                'SMOM3': 'SELL - Bearish momentum signal (Strength: 3)',
+                # Legacy format
                 'A': 'Strong BUY - Breakout above resistance',
                 'B': 'Strong BUY - Oversold recovery', 
                 'C': 'Strong SELL - Breakdown below support',
@@ -289,8 +320,14 @@ def main():
             signals_df['date'] = pd.to_datetime(signals_df['created_at']).dt.date
             daily_signals = signals_df.groupby(['date', 'signal_type']).size().reset_index(name='count')
             
-            # Redefine signal_colors for this scope
-            signal_colors = {'A': '#00C851', 'B': '#33B679', 'C': '#FFB300', 'D': '#FF4444'}
+            # Redefine signal_colors for this scope - support both formats
+            signal_colors = {
+                # New TXYZN format
+                'BBRK9': '#00C851', 'BRSV7': '#33B679', 'BMOM7': '#33B679', 'BMOM9': '#00C851',
+                'HMOM5': '#FFB300', 'SBRK3': '#FF4444', 'SOVB1': '#FF4444', 'SMOM3': '#FF4444',
+                # Legacy format
+                'A': '#00C851', 'B': '#33B679', 'C': '#FFB300', 'D': '#FF4444'
+            }
             fig_timeline = px.line(
                 daily_signals,
                 x='date',
@@ -363,11 +400,17 @@ def main():
         st.subheader("System Information")
         st.write(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         st.write("Strategy: HK Equity Momentum/Breakout Strategy")
-        st.write("Signal Types:")
-        st.write("• A: Strong BUY (Breakout above resistance)")
-        st.write("• B: Strong BUY (Oversold recovery)")  
-        st.write("• C: Strong SELL (Breakdown below support)")
-        st.write("• D: Strong TRIM (Overbought reversal)")
+        st.write("Signal Types (New TXYZN Format):")
+        st.write("• BBRK9: Strong BUY (Breakout above resistance, Strength: 9)")
+        st.write("• BRSV7: Strong BUY (RSI Reversal recovery, Strength: 7)")
+        st.write("• HMOM5: HOLD (Neutral momentum, Strength: 5)")
+        st.write("• SBRK3: SELL (Breakdown below support, Strength: 3)")
+        st.write("• SOVB1: SELL (Overbought reversal, Strength: 1)")
+        st.write("")
+        st.write("Signal Format: T-XYZ-N")
+        st.write("• T: Trading action (B=Buy, S=Sell, H=Hold)")
+        st.write("• XYZ: Strategy identifier (BRK=Breakout, RSV=RSI Reversal, MOM=Momentum, OVB=Overbought)")
+        st.write("• N: Signal strength (1-9, where 9 is strongest)")
         from strategy import BASELINE_DATE, LOOKBACK_DAYS, USE_LIVE_QUOTES
         st.write(f"Baseline Date: {BASELINE_DATE}")
         st.write(f"Lookback Period: {LOOKBACK_DAYS} days")
