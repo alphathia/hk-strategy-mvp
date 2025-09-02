@@ -61,8 +61,8 @@ class PortfolioAnalysisManager:
                 # First, validate that the portfolio exists and has positions
                 cur.execute("""
                     SELECT COUNT(*) as position_count
-                    FROM portfolio_positions
-                    WHERE portfolio_id = %s AND quantity > 0
+                    FROM portfolio_holdings
+                    WHERE portfolio_id = %s
                 """, (portfolio_id,))
                 
                 result = cur.fetchone()
@@ -96,8 +96,8 @@ class PortfolioAnalysisManager:
                 
                 # Get current portfolio positions to create initial state
                 cur.execute("""
-                    SELECT symbol, company_name, quantity, avg_cost, current_price, sector
-                    FROM portfolio_positions
+                    SELECT symbol, company_name, quantity, avg_cost, sector
+                    FROM portfolio_holdings
                     WHERE portfolio_id = %s AND quantity > 0
                     ORDER BY symbol
                 """, (portfolio_id,))
@@ -262,11 +262,10 @@ class PortfolioAnalysisManager:
                                 SUM(CASE WHEN sc.quantity_change > 0 THEN sc.quantity_change ELSE 0 END))
                         ELSE 0 
                     END as avg_cost,
-                    -- Get current price from portfolio_positions (would be updated in real system)
-                    MAX(pp.current_price) as current_price,
-                    MAX(pp.company_name) as company_name
+                    -- Get company name from portfolio_holdings
+                    MAX(ph.company_name) as company_name
                 FROM portfolio_analysis_state_changes sc
-                LEFT JOIN portfolio_positions pp ON sc.symbol = pp.symbol
+                LEFT JOIN portfolio_holdings ph ON sc.symbol = ph.symbol
                 WHERE sc.analysis_id = %s
                 GROUP BY sc.symbol
                 HAVING SUM(sc.quantity_change) > 0
@@ -278,6 +277,247 @@ class PortfolioAnalysisManager:
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
             return pd.DataFrame()
+    
+    def get_positions_at_date(self, analysis_id: int, target_date: date) -> pd.DataFrame:
+        """
+        Get portfolio positions as of a specific date within the analysis period
+        
+        Args:
+            analysis_id: Analysis ID to query
+            target_date: Target date to calculate positions for
+            
+        Returns:
+            DataFrame with symbol, quantity, avg_cost, company_name, market_value (if prices available)
+        """
+        try:
+            conn = self.get_connection()
+            
+            # First, validate the target date is within the analysis period
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT start_date, end_date, analysis_name 
+                    FROM portfolio_analyses 
+                    WHERE id = %s
+                """, (analysis_id,))
+                
+                result = cur.fetchone()
+                if not result:
+                    logger.warning(f"Analysis {analysis_id} not found")
+                    return pd.DataFrame()
+                
+                start_date, end_date, analysis_name = result
+                
+                if target_date < start_date or target_date > end_date:
+                    logger.warning(f"Target date {target_date} is outside analysis period {start_date} to {end_date}")
+                    return pd.DataFrame()
+            
+            # Get positions as of the target date using cumulative transactions
+            query = """
+                SELECT 
+                    sc.symbol,
+                    SUM(sc.quantity_change) as current_quantity,
+                    -- Calculate weighted average cost for purchases up to target date
+                    CASE 
+                        WHEN SUM(CASE WHEN sc.quantity_change > 0 AND sc.transaction_date <= %s 
+                                     THEN sc.quantity_change ELSE 0 END) > 0 THEN
+                            ABS(SUM(CASE WHEN sc.quantity_change > 0 AND sc.transaction_date <= %s 
+                                        THEN sc.cash_change ELSE 0 END) / 
+                                SUM(CASE WHEN sc.quantity_change > 0 AND sc.transaction_date <= %s 
+                                        THEN sc.quantity_change ELSE 0 END))
+                        ELSE 0 
+                    END as avg_cost,
+                    -- Get company name from portfolio_holdings
+                    MAX(ph.company_name) as company_name
+                FROM portfolio_analysis_state_changes sc
+                LEFT JOIN portfolio_holdings ph ON sc.symbol = ph.symbol
+                WHERE sc.analysis_id = %s 
+                  AND sc.transaction_date <= %s
+                GROUP BY sc.symbol
+                HAVING SUM(sc.quantity_change) > 0
+                ORDER BY sc.symbol
+            """
+            
+            return pd.read_sql(query, conn, params=[target_date, target_date, target_date, analysis_id, target_date])
+            
+        except Exception as e:
+            logger.error(f"Error getting positions at date {target_date}: {e}")
+            return pd.DataFrame()
+    
+    def get_cash_position_at_date(self, analysis_id: int, target_date: date) -> float:
+        """
+        Get cash position as of a specific date
+        
+        Args:
+            analysis_id: Analysis ID to query
+            target_date: Target date to calculate cash position for
+            
+        Returns:
+            Cash amount as of target date
+        """
+        try:
+            conn = self.get_connection()
+            
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 
+                        pa.start_cash + COALESCE(SUM(sc.cash_change), 0) as cash_position
+                    FROM portfolio_analyses pa
+                    LEFT JOIN portfolio_analysis_state_changes sc 
+                        ON pa.id = sc.analysis_id 
+                        AND sc.transaction_date <= %s
+                    WHERE pa.id = %s
+                    GROUP BY pa.start_cash
+                """, (target_date, analysis_id))
+                
+                result = cur.fetchone()
+                return float(result[0]) if result else 0.0
+                
+        except Exception as e:
+            logger.error(f"Error getting cash position at date {target_date}: {e}")
+            return 0.0
+    
+    def get_effective_trading_date(self, target_date: date, analysis_id: int = None) -> Tuple[date, str]:
+        """
+        Get the effective trading date for analysis, with fallback to previous trading day
+        
+        Args:
+            target_date: Requested date
+            analysis_id: Optional analysis ID to validate within period
+            
+        Returns:
+            Tuple of (effective_date, reason_message)
+        """
+        try:
+            # Import here to avoid circular imports
+            from .hkex_calendar import HKEXCalendar
+            
+            calendar = HKEXCalendar()
+            
+            # If analysis_id provided, validate within analysis period first
+            if analysis_id:
+                conn = self.get_connection()
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT start_date, end_date 
+                        FROM portfolio_analyses 
+                        WHERE id = %s
+                    """, (analysis_id,))
+                    
+                    result = cur.fetchone()
+                    if result:
+                        start_date, end_date = result
+                        if target_date < start_date:
+                            return start_date, f"Date adjusted to analysis start date ({start_date})"
+                        if target_date > end_date:
+                            return end_date, f"Date adjusted to analysis end date ({end_date})"
+            
+            # Check if target date is a trading day
+            if calendar.is_trading_day(target_date):
+                return target_date, "Selected date is a trading day"
+            
+            # Find previous trading day
+            previous_trading_day = calendar.get_previous_trading_day(target_date)
+            
+            # Get reason for non-trading day
+            day_info = calendar.get_trading_day_info(target_date)
+            reason = day_info.get('reason', 'Non-trading day')
+            
+            return previous_trading_day, f"Adjusted to previous trading day ({reason})"
+            
+        except Exception as e:
+            logger.error(f"Error getting effective trading date: {e}")
+            return target_date, "Using requested date (validation failed)"
+    
+    def get_portfolio_state_at_date(self, analysis_id: int, target_date: date) -> Dict[str, Any]:
+        """
+        Get complete portfolio state (positions + cash + market values) at a specific date
+        
+        Args:
+            analysis_id: Analysis ID to query
+            target_date: Target date for portfolio state
+            
+        Returns:
+            Dictionary with positions, cash, total_value, and metadata
+        """
+        try:
+            # Get effective trading date
+            effective_date, date_reason = self.get_effective_trading_date(target_date, analysis_id)
+            
+            # Get positions and cash at effective date
+            positions_df = self.get_positions_at_date(analysis_id, effective_date)
+            cash_position = self.get_cash_position_at_date(analysis_id, effective_date)
+            
+            # Calculate market values using prices from database
+            total_market_value = 0
+            positions_with_values = []
+            
+            if not positions_df.empty:
+                conn = self.get_connection()
+                
+                for _, position in positions_df.iterrows():
+                    symbol = position['symbol']
+                    quantity = position['current_quantity']
+                    avg_cost = position['avg_cost']
+                    
+                    # Get price for effective date
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT close_price, trade_date
+                            FROM daily_equity_technicals 
+                            WHERE symbol = %s 
+                            AND ABS(trade_date - %s::date) <= 7
+                            ORDER BY ABS(trade_date - %s::date)
+                            LIMIT 1
+                        """, (symbol, effective_date, effective_date))
+                        
+                        price_result = cur.fetchone()
+                        if price_result:
+                            current_price = float(price_result[0])
+                            price_date = price_result[1]
+                        else:
+                            current_price = float(avg_cost) # Fallback to cost
+                            price_date = effective_date
+                    
+                    market_value = current_price * quantity
+                    total_market_value += market_value
+                    
+                    positions_with_values.append({
+                        'symbol': symbol,
+                        'company_name': position['company_name'],
+                        'quantity': quantity,
+                        'avg_cost': float(avg_cost),
+                        'current_price': current_price,
+                        'market_value': market_value,
+                        'unrealized_pnl': market_value - (float(avg_cost) * quantity),
+                        'price_date': price_date
+                    })
+            
+            return {
+                'analysis_id': analysis_id,
+                'target_date': target_date,
+                'effective_date': effective_date,
+                'date_reason': date_reason,
+                'cash_position': cash_position,
+                'positions': positions_with_values,
+                'total_market_value': total_market_value,
+                'total_portfolio_value': total_market_value + cash_position,
+                'position_count': len(positions_with_values)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting portfolio state at date {target_date}: {e}")
+            return {
+                'analysis_id': analysis_id,
+                'target_date': target_date,
+                'effective_date': target_date,
+                'date_reason': 'Error occurred',
+                'cash_position': 0.0,
+                'positions': [],
+                'total_market_value': 0.0,
+                'total_portfolio_value': 0.0,
+                'position_count': 0,
+                'error': str(e)
+            }
     
     def delete_analysis(self, analysis_id: int) -> Tuple[bool, str]:
         """Delete an analysis and all its transactions"""
@@ -1295,10 +1535,10 @@ class PortfolioAnalysisManager:
                         new_qty = old_qty + qty_change
                         
                         if new_qty > 0 and qty_change > 0:  # Buying
-                            # Weighted average cost basis
+                            # Weighted average cost basis with divide by zero protection
                             old_value = old_qty * positions[symbol]['cost_basis']
                             new_value = qty_change * price
-                            positions[symbol]['cost_basis'] = (old_value + new_value) / new_qty
+                            positions[symbol]['cost_basis'] = (old_value + new_value) / new_qty if new_qty > 0 else 0
                         
                         positions[symbol]['quantity'] = new_qty
                         current_cash += cash_change

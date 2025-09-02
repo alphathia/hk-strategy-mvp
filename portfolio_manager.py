@@ -261,10 +261,66 @@ class PortfolioManager:
             logger.error(f"Failed to delete portfolio {portfolio_id}: {e}")
             return False
     
-    def update_position(self, portfolio_id: str, position_data: Dict[str, Any]) -> bool:
-        """Update a single position in a portfolio"""
+    def update_position(self, portfolio_id: str, position_data: Dict[str, Any]) -> tuple[bool, str]:
+        """
+        Update a single position in a portfolio
+        
+        Returns:
+            tuple[bool, str]: (success, error_message)
+        """
         try:
+            # Input validation
+            required_fields = ['symbol', 'company_name', 'quantity', 'avg_cost']
+            missing_fields = [field for field in required_fields if field not in position_data]
+            if missing_fields:
+                error_msg = f"Missing required fields: {', '.join(missing_fields)}"
+                logger.error(f"Update position validation failed: {error_msg}")
+                return False, error_msg
+            
+            # Debug logging
+            logger.debug(f"Updating position in portfolio {portfolio_id}: {position_data}")
+            
+            # Fetch sector from Yahoo Finance if not provided or if it's generic
+            sector = position_data.get('sector', 'Other')
+            if sector in ['Other', 'Unknown', '', None]:
+                try:
+                    import yfinance as yf
+                    logger.debug(f"Fetching sector information for symbol {position_data['symbol']} from Yahoo Finance")
+                    ticker = yf.Ticker(position_data['symbol'])
+                    info = ticker.info
+                    
+                    # Try different sector fields from Yahoo Finance
+                    if 'sector' in info and info['sector']:
+                        sector = info['sector']
+                        logger.info(f"Retrieved sector '{sector}' from Yahoo Finance for {position_data['symbol']}")
+                    elif 'industry' in info and info['industry']:
+                        sector = info['industry']
+                        logger.info(f"Retrieved industry '{sector}' from Yahoo Finance for {position_data['symbol']}")
+                    else:
+                        logger.warning(f"No sector/industry information available for {position_data['symbol']}")
+                        sector = 'Other'
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to fetch sector from Yahoo Finance for {position_data['symbol']}: {e}")
+                    sector = position_data.get('sector', 'Other')
+            
+            # Update position_data with retrieved sector
+            position_data['sector'] = sector
+            
             conn = self.get_connection()
+            if not conn or conn.closed:
+                return False, "Database connection failed"
+                
+            # Portfolio existence validation - check if portfolio exists in database
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM portfolios WHERE portfolio_id = %s", (portfolio_id,))
+                portfolio_exists = cur.fetchone()[0] > 0
+                
+                if not portfolio_exists:
+                    error_msg = f"Portfolio '{portfolio_id}' does not exist in database. Please create the portfolio first or refresh the page."
+                    logger.error(f"Portfolio existence check failed: {error_msg}")
+                    return False, error_msg
+                
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO portfolio_holdings 
@@ -287,30 +343,58 @@ class PortfolioManager:
                 ))
                 
                 conn.commit()
-                logger.info(f"Position {position_data['symbol']} updated in portfolio {portfolio_id}")
-                return True
+                logger.info(f"Position {position_data['symbol']} updated successfully in portfolio {portfolio_id}")
+                return True, "Success"
                 
+        except psycopg2.IntegrityError as e:
+            error_msg = f"Data integrity error: {str(e)}"
+            logger.error(f"Failed to update position {position_data.get('symbol', 'unknown')} in portfolio {portfolio_id}: {error_msg}")
+            return False, error_msg
+        except psycopg2.OperationalError as e:
+            error_msg = f"Database connection error: {str(e)}"
+            logger.error(f"Failed to update position {position_data.get('symbol', 'unknown')} in portfolio {portfolio_id}: {error_msg}")
+            return False, error_msg
         except Exception as e:
-            logger.error(f"Failed to update position in portfolio {portfolio_id}: {e}")
-            return False
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(f"Failed to update position {position_data.get('symbol', 'unknown')} in portfolio {portfolio_id}: {error_msg}")
+            return False, error_msg
     
-    def remove_position(self, portfolio_id: str, symbol: str) -> bool:
-        """Remove a position from a portfolio"""
+    def remove_position(self, portfolio_id: str, symbol: str) -> tuple[bool, str]:
+        """
+        Remove a position from a portfolio
+        
+        Returns:
+            tuple[bool, str]: (success, error_message)
+        """
         try:
+            logger.debug(f"Removing position {symbol} from portfolio {portfolio_id}")
+            
             conn = self.get_connection()
+            if not conn or conn.closed:
+                return False, "Database connection failed"
+                
             with conn.cursor() as cur:
                 cur.execute("""
                     DELETE FROM portfolio_holdings 
                     WHERE portfolio_id = %s AND symbol = %s
                 """, (portfolio_id, symbol))
                 
-                conn.commit()
-                logger.info(f"Position {symbol} removed from portfolio {portfolio_id}")
-                return True
+                if cur.rowcount == 0:
+                    logger.warning(f"No position found to remove: {symbol} in portfolio {portfolio_id}")
+                    return False, f"Position {symbol} not found in portfolio"
                 
+                conn.commit()
+                logger.info(f"Position {symbol} removed successfully from portfolio {portfolio_id}")
+                return True, "Success"
+                
+        except psycopg2.OperationalError as e:
+            error_msg = f"Database connection error: {str(e)}"
+            logger.error(f"Failed to remove position {symbol} from portfolio {portfolio_id}: {error_msg}")
+            return False, error_msg
         except Exception as e:
-            logger.error(f"Failed to remove position {symbol} from portfolio {portfolio_id}: {e}")
-            return False
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(f"Failed to remove position {symbol} from portfolio {portfolio_id}: {error_msg}")
+            return False, error_msg
 
 # Global instance
 _portfolio_manager = None

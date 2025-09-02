@@ -279,9 +279,17 @@ def add_symbol_dialog(portfolio_id: str):
         error_msg = "Quantity must be a non-negative integer"
     elif not isinstance(avg_cost, (int, float)) or avg_cost < 0:
         error_msg = "Average cost must be a non-negative number"
+    else:
+        # Check for duplicate symbol in current portfolio
+        existing_symbols = [pos['symbol'] for pos in st.session_state.portfolios[portfolio_id]['positions']]
+        if validated_symbol in existing_symbols:
+            error_msg = f"Symbol {validated_symbol} already exists in this portfolio. You cannot add the same symbol twice."
     
     if error_msg:
         st.error(f"❌ {error_msg}")
+        # Add helpful hint for duplicate symbol error
+        if "already exists in this portfolio" in error_msg:
+            st.info("💡 To modify an existing position, use the **Edit** button in the position table below.")
     
     st.markdown("---")
     
@@ -304,27 +312,15 @@ def add_symbol_dialog(portfolio_id: str):
                 'sector': validated_sector
             }
             
-            # Also add to current portfolio for immediate display
-            if validated_symbol not in [pos['symbol'] for pos in st.session_state.portfolios[portfolio_id]['positions']]:
-                st.session_state.portfolios[portfolio_id]['positions'].append({
-                    'symbol': validated_symbol,
-                    'company_name': validated_company,
-                    'quantity': quantity,
-                    'avg_cost': avg_cost,
-                    'sector': validated_sector
-                })
-            else:
-                # Update existing position
-                for i, pos in enumerate(st.session_state.portfolios[portfolio_id]['positions']):
-                    if pos['symbol'] == validated_symbol:
-                        st.session_state.portfolios[portfolio_id]['positions'][i] = {
-                            'symbol': validated_symbol,
-                            'company_name': validated_company,
-                            'quantity': quantity,
-                            'avg_cost': avg_cost,
-                            'sector': validated_sector
-                        }
-                        break
+            # Add to current portfolio for immediate display
+            # Note: Duplicate validation above ensures this symbol doesn't already exist
+            st.session_state.portfolios[portfolio_id]['positions'].append({
+                'symbol': validated_symbol,
+                'company_name': validated_company,
+                'quantity': quantity,
+                'avg_cost': avg_cost,
+                'sector': validated_sector
+            })
             
             # Clear validation session state
             for key in ['validated_symbol', 'validated_company', 'validated_sector', 'validation_success']:
@@ -504,31 +500,40 @@ def create_portfolio_dialog():
         if st.button("✅ Create Portfolio", use_container_width=True, disabled=disabled):
             portfolio_id = new_portfolio_id.strip().upper().replace(' ', '_')
             
-            # Create new portfolio
-            st.session_state.portfolios[portfolio_id] = {
-                'name': new_portfolio_name.strip(),
-                'description': new_portfolio_desc.strip(),
-                'positions': []
-            }
+            # Create new portfolio in database using portfolio manager
+            success = st.session_state.portfolio_manager.create_portfolio(
+                portfolio_id,
+                new_portfolio_name.strip(),
+                new_portfolio_desc.strip()
+            )
             
-            st.success(f"✅ Portfolio '{new_portfolio_name}' created successfully!")
-            
-            # Clear form fields
-            for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
-                if key in st.session_state:
-                    st.session_state[key] = ''
-            
-            # Brief delay to show success message
-            import time
-            time.sleep(1)
-            st.rerun()
+            if success:
+                # Refresh portfolios from database to ensure consistency
+                st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                st.success(f"✅ Portfolio '{new_portfolio_name}' created successfully and saved to database!")
+                
+                # Clear form fields
+                for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                
+                # Brief delay to show success message
+                import time
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(f"❌ Failed to create portfolio '{new_portfolio_name}' in database!")
+                st.warning("💡 **Possible reasons:**")
+                st.markdown("- Portfolio ID already exists in database")
+                st.markdown("- Database connection issue")
+                st.info("💡 **Try:** Use a different Portfolio ID or check database connection")
     
     with col_cancel:
         if st.button("❌ Cancel", use_container_width=True):
             # Clear form fields on cancel
             for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
                 if key in st.session_state:
-                    st.session_state[key] = ''
+                    del st.session_state[key]
             st.rerun()
 
 @st.dialog("Total Positions Details")
@@ -1453,6 +1458,76 @@ def check_yfinance_health():
     
     return results
 
+def trigger_portfolio_refresh_after_save(portfolio_id: str, changes_made: list):
+    """Trigger comprehensive portfolio refresh after successful save operations"""
+    try:
+        # 1. Force recalculation of cached portfolio metrics
+        if 'portfolio_metrics_cache' in st.session_state:
+            del st.session_state['portfolio_metrics_cache']
+        
+        # 2. Refresh position-related caches
+        if 'position_count_cache' in st.session_state:
+            del st.session_state['position_count_cache']
+            
+        # 3. Auto-update OHLCV data for changed symbols
+        if changes_made and portfolio_id:
+            # Extract symbols that were updated from changes_made
+            updated_symbols = []
+            for change in changes_made:
+                if "Updated" in change or "Added" in change:
+                    # Extract symbol from messages like "Updated 1211.HK" or "Added 0700.HK"
+                    parts = change.split(' ')
+                    if len(parts) >= 2:
+                        symbol = parts[1]
+                        if '.' in symbol:  # Basic symbol validation
+                            updated_symbols.append(symbol)
+            
+            if updated_symbols:
+                # Initialize portfolio prices cache if needed
+                if portfolio_id not in st.session_state.portfolio_prices:
+                    st.session_state.portfolio_prices[portfolio_id] = {}
+                
+                # Background OHLCV update for changed symbols
+                st.info(f"🔄 Auto-updating market data for {len(updated_symbols)} changed position(s)...")
+                with st.spinner("Fetching latest market prices..."):
+                    for symbol in updated_symbols:
+                        try:
+                            price, status = fetch_hk_price(symbol)
+                            st.session_state.portfolio_prices[portfolio_id][symbol] = price
+                        except Exception as e:
+                            st.warning(f"⚠️ Could not update price for {symbol}: {str(e)}")
+                    
+                    # Update last update timestamp
+                    st.session_state.last_update[portfolio_id] = datetime.now()
+                    
+                st.success(f"💰 Market data updated for: {', '.join(updated_symbols)}")
+        
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ Portfolio refresh partially failed: {str(e)}")
+        return False
+
+def check_portfolio_has_analyses(portfolio_id: str) -> tuple[bool, int, str]:
+    """
+    Check if portfolio has existing analyses that would restrict updates
+    
+    Returns:
+        tuple[bool, int, str]: (has_analyses, count, message)
+    """
+    try:
+        if 'portfolio_analysis_manager' in st.session_state:
+            analyses_df = st.session_state.portfolio_analysis_manager.get_analysis_summary(portfolio_id)
+            analysis_count = len(analyses_df)
+            
+            if analysis_count > 0:
+                return True, analysis_count, f"Portfolio has {analysis_count} existing analysis/analyses"
+            else:
+                return False, 0, "No analyses found"
+        else:
+            return False, 0, "Analysis manager not available"
+    except Exception as e:
+        return False, 0, f"Error checking analyses: {str(e)}"
+
 def get_system_info():
     """Get system information"""
     try:
@@ -1704,10 +1779,44 @@ if st.session_state.current_page == 'portfolio':
 
     if not is_editing:
         if st.sidebar.button("📝 Edit Portfolio", type="primary"):
-            # Enter edit mode - create backup
-            st.session_state.edit_mode[selected_portfolio] = True
-            st.session_state.portfolio_backup[selected_portfolio] = copy.deepcopy(current_portfolio)
-            st.rerun()
+            # Check for portfolio analysis restrictions before entering edit mode
+            has_analyses, analysis_count, message = check_portfolio_has_analyses(selected_portfolio)
+            
+            if has_analyses:
+                # Show restriction warning
+                st.sidebar.error(f"🚫 **Cannot edit portfolio**: {message}")
+                st.sidebar.warning("⚠️ Updating portfolios that already have analyses is not allowed.")
+                st.sidebar.info("💡 **Solution**: Copy this portfolio to a new one to proceed with analysis.")
+                
+                # Offer quick copy option
+                if st.sidebar.button("📋 Copy Portfolio Now", type="secondary", help="Create a copy of this portfolio for editing"):
+                    copy_id = f"{selected_portfolio}_Copy"
+                    counter = 1
+                    while copy_id in st.session_state.portfolios:
+                        copy_id = f"{selected_portfolio}_Copy_{counter}"
+                        counter += 1
+                    
+                    # Use portfolio manager for proper database integration
+                    success = st.session_state.portfolio_manager.copy_portfolio(
+                        selected_portfolio, copy_id, f"{current_portfolio['name']} - Copy",
+                        f"Editable copy of {current_portfolio['name']} (original has {analysis_count} analyses)"
+                    )
+                    
+                    if success:
+                        # Reload portfolios and switch to the new copy in edit mode
+                        st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                        st.session_state.portfolio_switch_request = copy_id
+                        st.session_state.edit_mode[copy_id] = True
+                        st.session_state.portfolio_backup[copy_id] = copy.deepcopy(st.session_state.portfolios[copy_id])
+                        st.sidebar.success(f"✅ Created editable copy: '{copy_id}'")
+                        st.rerun()
+                    else:
+                        st.sidebar.error("❌ Failed to create portfolio copy")
+            else:
+                # No analyses - proceed with normal edit mode
+                st.session_state.edit_mode[selected_portfolio] = True
+                st.session_state.portfolio_backup[selected_portfolio] = copy.deepcopy(current_portfolio)
+                st.rerun()
     else:
         st.sidebar.warning("🔄 Editing Mode Active")
         
@@ -2660,159 +2769,186 @@ elif st.session_state.current_page == 'pv_analysis':
                             end_date = selected_analysis['end_date']
                             
                             selected_date = st.date_input(
-                                "Select Date for Analysis:",
+                                "📅 Choose Date for Portfolio Analysis:",
                                 value=end_date,
                                 min_value=start_date,
                                 max_value=end_date,
-                                key="analysis_date_selector"
+                                key="analysis_date_selector",
+                                help="Select any date within the analysis period. Non-trading days will automatically use the previous trading day's data."
                             )
-                            st.session_state.selected_analysis_date = selected_date
+                            
+                            # Validate trading day and show feedback
+                            if selected_date:
+                                effective_date, date_reason = st.session_state.portfolio_analysis_manager.get_effective_trading_date(
+                                    selected_date, st.session_state.selected_analysis_id
+                                )
+                                
+                                # Show date validation feedback
+                                if effective_date != selected_date:
+                                    st.info(f"📊 **Trading Day Adjustment**: {date_reason}")
+                                    st.info(f"🗓️ **Effective Analysis Date**: {effective_date.strftime('%A, %B %d, %Y')}")
+                                else:
+                                    st.success(f"✅ **{date_reason}**: {effective_date.strftime('%A, %B %d, %Y')}")
+                                
+                                st.session_state.selected_analysis_date = selected_date
+                                st.session_state.effective_analysis_date = effective_date
                 
                 with col3:
+                    # Add analyze button for selected date
+                    if st.session_state.get('selected_analysis_date') and st.session_state.get('selected_analysis_id'):
+                        if st.button("📊 Analyze Portfolio", type="primary", use_container_width=True):
+                            # Store the analysis state for the selected date
+                            portfolio_state = st.session_state.portfolio_analysis_manager.get_portfolio_state_at_date(
+                                st.session_state.selected_analysis_id,
+                                st.session_state.selected_analysis_date
+                            )
+                            st.session_state.portfolio_state_analysis = portfolio_state
+                            st.success(f"✅ Portfolio analyzed for {portfolio_state['effective_date']}")
+                            st.rerun()
+                    
+                    # Refresh chart button
                     if st.button("🔄 Refresh Chart"):
                         if 'price_data_cache' in st.session_state:
                             st.session_state.price_data_cache.clear()
                             st.session_state.cache_expiry.clear()
                         st.rerun()
                 
-                # Show equity analysis for selected analysis and date
-                if st.session_state.selected_analysis_id and st.session_state.selected_analysis_date:
+                # Show portfolio analysis results
+                if st.session_state.get('portfolio_state_analysis'):
+                    portfolio_state = st.session_state.portfolio_state_analysis
+                    effective_date = portfolio_state['effective_date']
+                    selected_analysis = analyses_df[analyses_df['id'] == st.session_state.selected_analysis_id].iloc[0]
+                    
+                    st.markdown(f"#### 📊 Portfolio State Analysis - {selected_analysis['name']} ({effective_date})")
+                    
+                    # Show portfolio summary
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("💰 Total Portfolio Value", f"HK${portfolio_state['total_portfolio_value']:,.2f}")
+                    with col2:
+                        st.metric("📈 Market Value", f"HK${portfolio_state['total_market_value']:,.2f}")
+                    with col3:
+                        st.metric("💵 Cash Position", f"HK${portfolio_state['cash_position']:,.2f}")
+                    with col4:
+                        st.metric("📋 Active Positions", portfolio_state['position_count'])
+                    
+                    # Show date adjustment info if applicable
+                    if portfolio_state['target_date'] != portfolio_state['effective_date']:
+                        st.info(f"📅 **{portfolio_state['date_reason']}**: Analysis conducted for {effective_date.strftime('%A, %B %d, %Y')}")
+                    
+                    # Display positions table
+                    positions = portfolio_state['positions']
+                    if positions:
+                        st.markdown("##### 🏢 Individual Holdings")
+                        
+                        # Create custom table layout for positions
+                        header_cols = st.columns([1, 3, 1.2, 1.2, 1.2, 1.5, 1.5, 1])
+                        headers = ['Symbol', 'Company', 'Qty', 'Avg Cost', 'Current', 'Market Value', 'P&L', 'Detail']
+                        for i, (col, header) in enumerate(zip(header_cols, headers)):
+                            with col:
+                                st.markdown(f"**{header}**")
+                        
+                        # Display each position
+                        for position in positions:
+                            row_cols = st.columns([1, 3, 1.2, 1.2, 1.2, 1.5, 1.5, 1])
+                            
+                            with row_cols[0]:
+                                st.text(position['symbol'])
+                            
+                            with row_cols[1]:
+                                company_name = position['company_name'] or "N/A"
+                                if len(company_name) > 25:
+                                    company_name = company_name[:22] + "..."
+                                st.text(company_name)
+                            
+                            with row_cols[2]:
+                                st.text(f"{position['quantity']:,}")
+                            
+                            with row_cols[3]:
+                                st.text(f"${position['avg_cost']:.2f}")
+                            
+                            with row_cols[4]:
+                                st.text(f"${position['current_price']:.2f}")
+                            
+                            with row_cols[5]:
+                                st.text(f"${position['market_value']:,.0f}")
+                            
+                            with row_cols[6]:
+                                pnl = position['unrealized_pnl']
+                                pnl_color = "green" if pnl >= 0 else "red"
+                                st.markdown(f"<span style='color: {pnl_color}'>${pnl:+,.0f}</span>", unsafe_allow_html=True)
+                            
+                            with row_cols[7]:
+                                if st.button("📋", key=f"detail_{position['symbol']}", help="Show technical details"):
+                                    st.session_state.show_technical_modal = position['symbol']
+                    else:
+                        st.info("💼 Portfolio had no active positions on the selected date")
+                
+                # Fallback: Show standard equity analysis for selected analysis and date
+                elif st.session_state.selected_analysis_id and st.session_state.selected_analysis_date:
+                    selected_analysis = analyses_df[analyses_df['id'] == st.session_state.selected_analysis_id].iloc[0]
                     st.markdown(f"#### 🏢 Equity Analysis - {selected_analysis['name']} ({st.session_state.selected_analysis_date})")
+                    st.info("📊 **Click 'Analyze Portfolio' button above to see the portfolio state for the selected date**")
                     
-                    # Get positions for the selected analysis
-                    positions_df = st.session_state.portfolio_analysis_manager.get_current_positions(st.session_state.selected_analysis_id)
+                
+                # Technical Analysis Modal (shared between portfolio state analysis and fallback)
+                if st.session_state.get('show_technical_modal'):
+                    symbol = st.session_state.show_technical_modal
                     
-                    if not positions_df.empty:
-                        # Initialize technical modal state
-                        if 'show_technical_modal' not in st.session_state:
-                            st.session_state.show_technical_modal = None
-                        
-                        # Create equity analysis table with the requested format
-                        equity_data = []
-                        data_sources = []  # Track data sources for user feedback
-                        
-                        for _, pos in positions_df.iterrows():
-                            symbol = pos['symbol']
+                    with st.container():
+                        st.markdown("---")
+                        col1, col2, col3 = st.columns([1, 3, 1])
+                        with col2:
+                            st.markdown(f"### 📊 Technical Analysis: {symbol}")
                             
-                            # Fetch real OHLCV data for the selected date
-                            price_data = fetch_equity_prices_by_date(symbol, st.session_state.selected_analysis_date)
+                            # Fetch real technical data from database
+                            tech_data = fetch_technical_analysis_data(symbol)
+                            tech_col1, tech_col2, tech_col3 = st.columns(3)
                             
-                            # Format the data for display
-                            open_price = price_data.get('open_price')
-                            close_price = price_data.get('close_price')
-                            volume = price_data.get('volume')
-                            data_source = price_data.get('data_source', 'unknown')
+                            with tech_col1:
+                                st.metric("Day High", f"${tech_data['day_high']:.2f}" if tech_data['day_high'] else "N/A")
+                                st.metric("Day Low", f"${tech_data['day_low']:.2f}" if tech_data['day_low'] else "N/A")
+                                st.metric("52-Week High", f"${tech_data['week_52_high']:.2f}" if tech_data['week_52_high'] else "N/A")
+                                st.metric("52-Week Low", f"${tech_data['week_52_low']:.2f}" if tech_data['week_52_low'] else "N/A")
                             
-                            equity_data.append({
-                                'Symbol': symbol,
-                                'Company': pos['company_name'][:25] + "..." if len(str(pos['company_name'])) > 25 else pos['company_name'],
-                                'Qty': f"{pos['current_quantity']:,}",
-                                'Open': f"${open_price:,.2f}" if open_price else "-",
-                                'Close': f"${close_price:,.2f}" if close_price else "-",
-                                'Volume': f"{volume:,}" if volume else "-",
-                                'Detail': symbol  # Will be used for detail button
-                            })
+                            with tech_col2:
+                                st.metric("RSI (14)", f"{tech_data['rsi_14']:.1f}" if tech_data['rsi_14'] else "N/A")
+                                st.metric("RSI (9)", f"{tech_data['rsi_9']:.1f}" if tech_data['rsi_9'] else "N/A")
+                                st.metric("Volume", f"{tech_data['volume']:,}" if tech_data['volume'] else "N/A")
+                                st.metric("Volume Ratio", f"{tech_data['volume_ratio']:.2f}" if tech_data['volume_ratio'] else "N/A")
                             
-                            # Track data source for feedback
-                            data_sources.append(f"{symbol}: {data_source}")
-                        
-                        # Display the equity table
-                        if equity_data:
-                            # Show data source information
-                            unique_sources = set([source.split(': ')[1] for source in data_sources])
-                            source_info = {
-                                'database_exact': '📊 Database (exact date)',
-                                'database_nearest': '📊 Database (nearest date)', 
-                                'yahoo_exact': '🌐 Yahoo Finance (exact date)',
-                                'yahoo_nearest': '🌐 Yahoo Finance (nearest date)',
-                                'mock_fallback': '⚠️ Mock data (fallback)'
-                            }
+                            with tech_col3:
+                                st.metric("EMA 12", f"${tech_data['ema_12']:.2f}" if tech_data['ema_12'] else "N/A")
+                                st.metric("EMA 26", f"${tech_data['ema_26']:.2f}" if tech_data['ema_26'] else "N/A")
+                                st.metric("SMA 50", f"${tech_data['sma_50']:.2f}" if tech_data['sma_50'] else "N/A")
+                                st.metric("SMA 200", f"${tech_data['sma_200']:.2f}" if tech_data['sma_200'] else "N/A")
                             
-                            source_text = ", ".join([source_info.get(src, src) for src in unique_sources])
-                            st.caption(f"**Data Sources:** {source_text}")
-                            
-                            # Create custom table layout for the Detail button
-                            header_cols = st.columns([1, 3, 1, 1.2, 1.2, 1.5, 1])
-                            headers = ['Symbol', 'Company', 'Qty', 'Open', 'Close', 'Volume', 'Detail']
-                            for i, (col, header) in enumerate(zip(header_cols, headers)):
-                                with col:
-                                    st.markdown(f"**{header}**")
+                            # Action buttons
+                            close_col1, close_col2 = st.columns([1, 1])
+                            with close_col1:
+                                if st.button("❌ Close", key="close_modal"):
+                                    st.session_state.show_technical_modal = None
+                                    st.rerun()
+                            with close_col2:
+                                if st.button("📈 View Full Chart", key="view_chart"):
+                                    # Prepare equity context for navigation
+                                    if st.session_state.selected_analysis_id:
+                                        analysis_info = analyses_df[analyses_df['id'] == st.session_state.selected_analysis_id].iloc[0]
+                                        st.session_state.equity_context = {
+                                            'symbol': symbol,
+                                            'company_name': tech_data.get('company_name', symbol),
+                                            'portfolio_name': selected_portfolio,
+                                            'portfolio_analysis_name': analysis_info['name'],
+                                            'start_date': str(analysis_info['start_date']),
+                                            'end_date': str(analysis_info['end_date'])
+                                        }
+                                        st.session_state.current_page = 'equity_analysis'
+                                        st.rerun()
                             
                             st.markdown("---")
-                            
-                            # Table rows
-                            for equity in equity_data:
-                                row_cols = st.columns([1, 3, 1, 1.2, 1.2, 1.5, 1])
-                                
-                                with row_cols[0]:
-                                    st.write(equity['Symbol'])
-                                with row_cols[1]:
-                                    st.write(equity['Company'])
-                                with row_cols[2]:
-                                    st.write(equity['Qty'])
-                                with row_cols[3]:
-                                    st.write(equity['Open'])
-                                with row_cols[4]:
-                                    st.write(equity['Close'])
-                                with row_cols[5]:
-                                    st.write(equity['Volume'])
-                                with row_cols[6]:
-                                    if st.button("📈", key=f"tech_{equity['Symbol']}", help=f"Technical analysis for {equity['Symbol']}"):
-                                        st.session_state.show_technical_modal = equity['Symbol']
-                                        st.rerun()
-                        
-                        # Technical Analysis Modal
-                        if st.session_state.show_technical_modal:
-                            symbol = st.session_state.show_technical_modal
-                            
-                            with st.container():
-                                st.markdown("---")
-                                col1, col2, col3 = st.columns([1, 3, 1])
-                                with col2:
-                                    st.markdown(f"### 📊 Technical Analysis: {symbol}")
-                                    
-                                    # Fetch real technical data from database
-                                    tech_data = fetch_technical_analysis_data(symbol)
-                                    tech_col1, tech_col2, tech_col3 = st.columns(3)
-                                    
-                                    with tech_col1:
-                                        st.metric("Day High", f"${tech_data['day_high']:.2f}" if tech_data['day_high'] else "N/A")
-                                        st.metric("Day Low", f"${tech_data['day_low']:.2f}" if tech_data['day_low'] else "N/A")
-                                        st.metric("52-Week High", f"${tech_data['week_52_high']:.2f}" if tech_data['week_52_high'] else "N/A")
-                                        st.metric("52-Week Low", f"${tech_data['week_52_low']:.2f}" if tech_data['week_52_low'] else "N/A")
-                                    
-                                    with tech_col2:
-                                        st.metric("RSI (14)", f"{tech_data['rsi_14']:.1f}" if tech_data['rsi_14'] else "N/A")
-                                        st.metric("EMA (12)", f"${tech_data['ema_12']:.2f}" if tech_data['ema_12'] else "N/A")
-                                        st.metric("EMA (26)", f"${tech_data['ema_26']:.2f}" if tech_data['ema_26'] else "N/A")
-                                        st.metric("SMA (20)", f"${tech_data['sma_20']:.2f}" if tech_data['sma_20'] else "N/A")
-                                    
-                                    with tech_col3:
-                                        st.metric("MACD", f"{tech_data['macd']:.2f}" if tech_data['macd'] else "N/A")
-                                        st.metric("Volume Ratio", f"{tech_data['volume_ratio']:.2f}" if tech_data['volume_ratio'] else "N/A")
-                                        st.metric("ATR (14)", f"${tech_data['atr_14']:.2f}" if tech_data['atr_14'] else "N/A")
-                                        st.metric("Support", f"${tech_data['support_level']:.2f}" if tech_data['support_level'] else "N/A")
-                                    
-                                    # Show data source and date
-                                    if tech_data['trade_date']:
-                                        st.caption(f"Data as of: {tech_data['trade_date']}")
-                                    else:
-                                        st.caption("Data source: Yahoo Finance (Live)")
-                                        
-                                    # Add some sample technical data to database for demo
-                                    if st.button("📊 Load Sample Technical Data", key="load_sample_tech", help="Add sample technical indicators to database for demonstration"):
-                                        load_sample_technical_data()
-                                    
-                                    # Close button
-                                    if st.button("✖️ Close Technical Analysis", key="close_technical_modal"):
-                                        st.session_state.show_technical_modal = None
-                                        st.rerun()
-                                
-                                st.markdown("---")
-                    else:
-                        st.info("No equity positions found for selected analysis")
+                
                 else:
-                    st.info("💡 Select an analysis and date above to view detailed equity breakdown")
+                    st.info("💡 Select an analysis and date above to view detailed portfolio analysis")
                 
                 # Clear selections button
                 if st.button("❌ Clear All Chart Selections"):
@@ -2869,8 +3005,7 @@ elif st.session_state.current_page == 'equity_analysis':
                     
                     # Update layout
                     fig.update_layout(
-                        title=f"{equity_ctx['company_name']} ({equity_ctx['symbol']}) - Price Chart",
-                        subtitle=f"Period: {equity_ctx['start_date']} to {equity_ctx['end_date']}",
+                        title=f"{equity_ctx['company_name']} ({equity_ctx['symbol']}) - Price Chart<br><sub>Period: {equity_ctx['start_date']} to {equity_ctx['end_date']}</sub>",
                         yaxis_title="Price (HKD)",
                         xaxis_title="Date",
                         height=600,
@@ -3178,12 +3313,13 @@ elif st.session_state.current_page == 'overview':
             last_update_str = "Never"
         
         overview_data.append({
-            "Portfolio ID": portfolio_id,
             "Name": portfolio_info['name'],
             "Description": portfolio_info['description'][:50] + "..." if len(portfolio_info['description']) > 50 else portfolio_info['description'],
-            "Positions": len(active_pos),
+            "All Positions": len(portfolio_info['positions']),
+            "Active": len(active_pos),
             "Value": f"HK${total_val:,.0f}",
-            "Last Updated": last_update_str
+            "Last Updated": last_update_str,
+            "Portfolio ID": portfolio_id  # Keep for internal reference but don't display
         })
     
     if overview_data:
@@ -3216,15 +3352,15 @@ elif st.session_state.current_page == 'overview':
         """, unsafe_allow_html=True)
         
         # Table header
-        header_cols = st.columns([1.5, 2, 2.5, 1, 1.5, 2, 2])
+        header_cols = st.columns([2.5, 2.3, 1.2, 1.0, 1.5, 2, 2])
         with header_cols[0]:
-            st.markdown("**Portfolio ID**")
-        with header_cols[1]:
             st.markdown("**Name**")
-        with header_cols[2]:
+        with header_cols[1]:
             st.markdown("**Description**")
+        with header_cols[2]:
+            st.markdown("**All Positions**")
         with header_cols[3]:
-            st.markdown("**Positions**")
+            st.markdown("**Active**")
         with header_cols[4]:
             st.markdown("**Value**")
         with header_cols[5]:
@@ -3238,11 +3374,9 @@ elif st.session_state.current_page == 'overview':
         for i, portfolio_data in enumerate(overview_data):
             portfolio_id = portfolio_data["Portfolio ID"]
             
-            row_cols = st.columns([1.5, 2, 2.5, 1, 1.5, 2, 2])
+            row_cols = st.columns([2.5, 2.3, 1.2, 1.0, 1.5, 2, 2])
             
             with row_cols[0]:
-                st.write(f"**{portfolio_data['Portfolio ID']}**")
-            with row_cols[1]:
                 # Clickable portfolio name that navigates to Portfolio Dashboard
                 if st.button(portfolio_data['Name'], 
                            key=f"name_click_{portfolio_id}_{i}", 
@@ -3261,10 +3395,12 @@ elif st.session_state.current_page == 'overview':
                     st.session_state.navigation['page'] = 'portfolio'
                     st.success(f"👁️ Viewing {portfolio_id} dashboard...")
                     st.rerun()
-            with row_cols[2]:
+            with row_cols[1]:
                 st.write(portfolio_data['Description'])
+            with row_cols[2]:
+                st.write(portfolio_data['All Positions'])
             with row_cols[3]:
-                st.write(portfolio_data['Positions'])
+                st.write(portfolio_data['Active'])
             with row_cols[4]:
                 st.write(portfolio_data['Value'])
             with row_cols[5]:
@@ -3275,17 +3411,26 @@ elif st.session_state.current_page == 'overview':
                 
                 with action_button_cols[0]:
                     if st.button("🔄", key=f"update_{portfolio_id}_{i}", help="Edit portfolio positions and details", use_container_width=True, type="primary"):
-                        # Navigate to Portfolio Dashboard in edit mode
-                        st.session_state.current_page = 'portfolio'
-                        # Use portfolio_switch_request to properly select the portfolio
-                        st.session_state.portfolio_switch_request = portfolio_id
-                        st.session_state.edit_mode[portfolio_id] = True
-                        st.session_state.portfolio_backup[portfolio_id] = copy.deepcopy(st.session_state.portfolios[portfolio_id])
-                        # Update navigation state for unified navigation system
-                        st.session_state.navigation['section'] = 'portfolios'
-                        st.session_state.navigation['page'] = 'portfolio'
-                        st.success(f"🔄 Opening {portfolio_id} for editing...")
-                        st.rerun()
+                        # Check for portfolio analysis restrictions before editing
+                        has_analyses, analysis_count, message = check_portfolio_has_analyses(portfolio_id)
+                        
+                        if has_analyses:
+                            # Show restriction error and suggest copying
+                            st.error(f"🚫 **Cannot edit portfolio**: {message}")
+                            st.warning("⚠️ Updating portfolios that already have analyses is not allowed.")
+                            st.info(f"💡 **Solution**: Copy '{portfolio_id}' to a new portfolio first, then edit the copy.")
+                        else:
+                            # Navigate to Portfolio Dashboard in edit mode
+                            st.session_state.current_page = 'portfolio'
+                            # Use portfolio_switch_request to properly select the portfolio
+                            st.session_state.portfolio_switch_request = portfolio_id
+                            st.session_state.edit_mode[portfolio_id] = True
+                            st.session_state.portfolio_backup[portfolio_id] = copy.deepcopy(st.session_state.portfolios[portfolio_id])
+                            # Update navigation state for unified navigation system
+                            st.session_state.navigation['section'] = 'portfolios'
+                            st.session_state.navigation['page'] = 'portfolio'
+                            st.success(f"🔄 Opening {portfolio_id} for editing...")
+                            st.rerun()
                 
                 with action_button_cols[1]:
                     if st.button("📋", key=f"copy_{portfolio_id}_{i}", help="Create a copy of this portfolio", use_container_width=True):
@@ -3565,8 +3710,12 @@ if is_editing:
                 # Show warning dialog
                 if deleted_count > 0 or modified_count > 0:
                     if st.session_state.get('confirm_save', False):
+                        # Show change summary
+                        st.info(f"📝 **Changes Summary**: Adding/Updating {modified_count} position(s), Deleting {deleted_count} position(s)")
+                        
                         # Process all changes
                         success = True
+                        changes_made = []
                         
                         # Apply modifications
                         for symbol, changes in st.session_state[modified_key].items():
@@ -3578,15 +3727,25 @@ if is_editing:
                                 "sector": changes['sector']
                             }
                             
-                            if not st.session_state.portfolio_manager.update_position(selected_portfolio, position_data):
+                            update_success, error_message = st.session_state.portfolio_manager.update_position(selected_portfolio, position_data)
+                            if not update_success:
                                 success = False
-                                st.error(f"❌ Failed to update {symbol}")
+                                st.error(f"❌ Failed to update {symbol}: {error_message}")
+                                if "connection" in error_message.lower():
+                                    st.info("💡 This might be a database connection issue. Check your network connection and try again.")
+                            else:
+                                changes_made.append(f"Updated {symbol}")
                         
                         # Apply deletions
                         for symbol in st.session_state[deleted_key]:
-                            if not st.session_state.portfolio_manager.remove_position(selected_portfolio, symbol):
+                            remove_success, error_message = st.session_state.portfolio_manager.remove_position(selected_portfolio, symbol)
+                            if not remove_success:
                                 success = False
-                                st.error(f"❌ Failed to delete {symbol}")
+                                st.error(f"❌ Failed to delete {symbol}: {error_message}")
+                                if "connection" in error_message.lower():
+                                    st.info("💡 This might be a database connection issue. Check your network connection and try again.")
+                            else:
+                                changes_made.append(f"Deleted {symbol}")
                         
                         if success:
                             # Clear session state
@@ -3594,11 +3753,18 @@ if is_editing:
                             st.session_state[deleted_key].clear()
                             st.session_state[edit_mode_key].clear()
                             
-                            # Reload portfolio data
+                            # Reload portfolio data to verify persistence
                             st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
                             
-                            # Stay in editing mode - don't navigate away
-                            st.success("✅ All changes saved successfully to database!")
+                            # Show detailed success message
+                            if changes_made:
+                                st.success("✅ All changes saved successfully to database!")
+                                st.info(f"📋 **Changes Applied**: {', '.join(changes_made)}")
+                                
+                                # Trigger comprehensive portfolio refresh
+                                trigger_portfolio_refresh_after_save(selected_portfolio, changes_made)
+                            else:
+                                st.success("✅ All changes saved successfully to database!")
                             st.rerun()
                         
                         st.session_state.confirm_save = False
@@ -3607,7 +3773,14 @@ if is_editing:
                         st.warning("⚠️ This will permanently save all changes to the database. Click 'Save All Changes' again to confirm.")
                         st.rerun()
                 else:
-                    st.info("💡 No changes to save")
+                    # Check if user clicked Save with no changes (implement popup-like behavior)
+                    if st.session_state.get('no_changes_clicked', False):
+                        st.warning("💡 **Nothing to change**: No modifications have been made to this portfolio.")
+                        st.session_state['no_changes_clicked'] = False
+                    else:
+                        st.session_state['no_changes_clicked'] = True
+                        st.info("💡 No changes to save")
+                        st.rerun()
         
         with col_cancel_all:
             if st.button("🔙 Back", use_container_width=True):
@@ -3632,17 +3805,17 @@ else:
         st.error("No portfolio selected")
         st.stop()
     
-    active_positions = [pos for pos in current_portfolio['positions'] if pos['quantity'] > 0]
+    all_positions = current_portfolio['positions']
     
-    if not active_positions:
-        st.warning("This portfolio has no active positions (quantity > 0)")
+    if not all_positions:
+        st.warning("This portfolio has no positions")
         st.stop()
     
-    # Process portfolio data for display
+    # Process portfolio data for display (including zero-quantity positions)
     portfolio_display = []
     total_value = total_cost = 0
     
-    for position in active_positions:
+    for position in all_positions:
         symbol = position["symbol"]
         
         if (selected_portfolio in st.session_state.portfolio_prices and 
@@ -3662,13 +3835,20 @@ else:
         # Protect against divide by zero using helper function
         pnl_pct = _safe_percentage(pnl, position_cost)
         
-        total_value += market_value
-        total_cost += position_cost
+        # Only add to totals if position has quantity > 0
+        if position["quantity"] > 0:
+            total_value += market_value
+            total_cost += position_cost
+        
+        # Add visual indicator for zero-quantity positions
+        quantity_display = f"{position['quantity']:,}"
+        if position["quantity"] == 0:
+            quantity_display = f"🚫 {quantity_display}"
         
         portfolio_display.append({
             "Symbol": symbol,
             "Company": position["company_name"][:25] + "..." if len(position["company_name"]) > 25 else position["company_name"],
-            "Quantity": f"{position['quantity']:,}",
+            "Quantity": quantity_display,
             "Avg Cost": f"HK${position['avg_cost']:.2f}",
             "Current": f"HK${current_price:.2f}",
             "Market Value": market_value,
@@ -3778,10 +3958,13 @@ else:
         """, unsafe_allow_html=True)
     
     with col6:
+        active_count = len([pos for pos in all_positions if pos['quantity'] > 0])
+        total_count = len(portfolio_display)
         st.markdown(f"""
         <div class="metric-container">
             <div class="metric-label">Positions</div>
-            <div class="metric-value">{len(portfolio_display)}</div>
+            <div class="metric-value">{active_count}/{total_count}</div>
+            <div class="metric-delta" style="font-size: 9px; color: #8e8ea0;">Active/Total</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -3815,6 +3998,14 @@ else:
             st.session_state.fetch_details[selected_portfolio] = []
             st.session_state.portfolio_prices[selected_portfolio] = {}
             
+            # Get active positions (quantity > 0) for real-time data fetch
+            active_positions = [pos for pos in all_positions if pos['quantity'] > 0]
+            
+            # Check if there are active positions to fetch
+            if not active_positions:
+                st.warning("No active positions to fetch real-time data for. All positions have zero quantity.")
+                st.stop()
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -3828,7 +4019,9 @@ else:
                 st.session_state.portfolio_prices[selected_portfolio][symbol] = price
                 st.session_state.fetch_details[selected_portfolio].append(status)
                 
-                progress_bar.progress((i + 1) / total_symbols)
+                # Safe progress calculation with divide by zero protection
+                if total_symbols > 0:
+                    progress_bar.progress((i + 1) / total_symbols)
                 
             st.session_state.last_update[selected_portfolio] = datetime.now()
             status_text.text("✅ All prices updated!")
@@ -3955,6 +4148,11 @@ else:
     # Portfolio table - moved up for better visibility
     st.subheader(f"📋 {selected_portfolio} Holdings")
     
+    # Show helpful note about zero-quantity positions
+    zero_positions_count = len([pos for pos in all_positions if pos['quantity'] == 0])
+    if zero_positions_count > 0:
+        st.info(f"💡 Showing all {len(all_positions)} positions including {zero_positions_count} with zero quantity (marked with 🚫)")
+    
     # Show fetch details in compact form below table header
     if selected_portfolio in st.session_state.fetch_details and st.session_state.fetch_details[selected_portfolio]:
         with st.expander("📋 Price Fetching Details", expanded=False):
@@ -4003,14 +4201,15 @@ else:
             with col2:
                 # Make company name clickable
                 if st.button(row['Company'], key=f"company_{idx}_{row['Symbol']}", help=f"Analyze {row['Symbol']} strategy"):
-                    # Store equity context for navigation
+                    # Store equity context for navigation with safe handling of current_analysis
+                    current_analysis = st.session_state.get('current_analysis')
                     st.session_state.equity_context = {
                         'symbol': row['Symbol'],
                         'company_name': row['Company'],
                         'portfolio_name': current_portfolio['name'],
-                        'portfolio_analysis_name': st.session_state.get('current_analysis', {}).get('name', 'Current Portfolio Analysis'),
-                        'start_date': st.session_state.get('current_analysis', {}).get('start_date', (date.today() - timedelta(days=180)).strftime('%Y-%m-%d')),
-                        'end_date': st.session_state.get('current_analysis', {}).get('end_date', date.today().strftime('%Y-%m-%d'))
+                        'portfolio_analysis_name': current_analysis.get('name', 'Current Portfolio Analysis') if current_analysis else 'Portfolio Holdings Analysis',
+                        'start_date': current_analysis.get('start_date', (date.today() - timedelta(days=180)).strftime('%Y-%m-%d')) if current_analysis else (date.today() - timedelta(days=180)).strftime('%Y-%m-%d'),
+                        'end_date': current_analysis.get('end_date', date.today().strftime('%Y-%m-%d')) if current_analysis else date.today().strftime('%Y-%m-%d')
                     }
                     st.session_state.current_page = 'equity_analysis'
                     st.rerun()
