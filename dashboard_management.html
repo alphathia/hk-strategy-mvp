@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategic Signal Management Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .tabs {
+            display: flex;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 1rem;
+            text-align: center;
+            background: white;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .tab:hover {
+            background: #f8f9ff;
+        }
+
+        .tab.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 2rem;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #eee;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            background: #5a67d8;
+            transform: translateY(-1px);
+        }
+
+        .btn-success {
+            background: #48bb78;
+        }
+
+        .btn-success:hover {
+            background: #38a169;
+        }
+
+        .btn-danger {
+            background: #f56565;
+        }
+
+        .btn-danger:hover {
+            background: #e53e3e;
+        }
+
+        .btn-secondary {
+            background: #a0aec0;
+        }
+
+        .btn-secondary:hover {
+            background: #718096;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            margin-top: 1rem;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .table th,
+        .table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .table th {
+            background: #f7fafc;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .table tr:hover {
+            background: #f8f9ff;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-success {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .badge-warning {
+            background: #fefcbf;
+            color: #744210;
+        }
+
+        .badge-info {
+            background: #bee3f8;
+            color: #2a4365;
+        }
+
+        .badge-danger {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .alert {
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .alert-danger {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #fc8181;
+        }
+
+        .alert-info {
+            background: #bee3f8;
+            color: #2a4365;
+            border: 1px solid #90cdf4;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80%;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .modal-footer {
+            padding: 1.5rem;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+
+        .close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #a0aec0;
+        }
+
+        .close:hover {
+            color: #718096;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .filters {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            align-items: end;
+        }
+
+        .filter-group {
+            flex: 1;
+        }
+
+        .validation-result {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .validation-result.valid {
+            background: #c6f6d5;
+            border-color: #9ae6b4;
+            color: #22543d;
+        }
+
+        .validation-result.invalid {
+            background: #fed7d7;
+            border-color: #fc8181;
+            color: #742a2a;
+        }
+
+        .error-list {
+            list-style: none;
+            margin-top: 0.5rem;
+        }
+
+        .error-list li {
+            margin-bottom: 0.25rem;
+        }
+
+        .error-list li::before {
+            content: "⚠ ";
+            color: #f56565;
+        }
+
+        .suggestion-list {
+            list-style: none;
+            margin-top: 0.5rem;
+        }
+
+        .suggestion-list li {
+            margin-bottom: 0.25rem;
+        }
+
+        .suggestion-list li::before {
+            content: "💡 ";
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Strategic Signal Management Dashboard</h1>
+        <p>Comprehensive management interface for TXYZn strategies, signals, and indicators</p>
+    </div>
+
+    <div class="container">
+        <!-- Navigation Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('strategies')">Strategy Management</button>
+            <button class="tab" onclick="showTab('signals')">Signal Events</button>
+            <button class="tab" onclick="showTab('indicators')">Indicators</button>
+            <button class="tab" onclick="showTab('validation')">Validation Tools</button>
+            <button class="tab" onclick="showTab('system')">System Status</button>
+        </div>
+
+        <!-- Strategy Management Tab -->
+        <div id="strategies" class="tab-content active">
+            <div class="section-header">
+                <h2>Strategy Management</h2>
+                <button class="btn btn-success" onclick="showCreateStrategyModal()">
+                    + Create New Strategy
+                </button>
+            </div>
+
+            <div class="stats-grid" id="strategyStats">
+                <!-- Strategy statistics will be loaded here -->
+            </div>
+
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Category Filter</label>
+                    <select id="strategyCategory" class="form-control" onchange="loadStrategies()">
+                        <option value="">All Categories</option>
+                        <option value="breakout">Breakout</option>
+                        <option value="mean-reversion">Mean Reversion</option>
+                        <option value="trend">Trend</option>
+                        <option value="divergence">Divergence</option>
+                        <option value="level">Level</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Side Filter</label>
+                    <select id="strategySide" class="form-control" onchange="loadStrategies()">
+                        <option value="">All Sides</option>
+                        <option value="B">Buy Strategies</option>
+                        <option value="S">Sell Strategies</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <button class="btn" onclick="loadStrategies()">Refresh</button>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table class="table" id="strategiesTable">
+                    <thead>
+                        <tr>
+                            <th>Base Strategy</th>
+                            <th>Name</th>
+                            <th>Side</th>
+                            <th>Category</th>
+                            <th>Market Conditions</th>
+                            <th>Complexity</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Strategy data will be loaded here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Signal Events Tab -->
+        <div id="signals" class="tab-content">
+            <div class="section-header">
+                <h2>Signal Events</h2>
+                <button class="btn btn-success" onclick="loadSignals()">Refresh Signals</button>
+            </div>
+
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Symbol</label>
+                    <input type="text" id="signalSymbol" class="form-control" placeholder="e.g., 0700.HK">
+                </div>
+                <div class="filter-group">
+                    <label>Strategy Key</label>
+                    <input type="text" id="signalStrategy" class="form-control" placeholder="e.g., BBRK7">
+                </div>
+                <div class="filter-group">
+                    <label>Min Strength</label>
+                    <select id="signalStrength" class="form-control">
+                        <option value="1">1 - All Signals</option>
+                        <option value="3">3 - Light+</option>
+                        <option value="5" selected>5 - Moderate+</option>
+                        <option value="7">7 - Strong+</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <button class="btn" onclick="loadSignals()">Filter</button>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table class="table" id="signalsTable">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Symbol</th>
+                            <th>Signal</th>
+                            <th>Action</th>
+                            <th>Strength</th>
+                            <th>Price</th>
+                            <th>Volume</th>
+                            <th>Reasons</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Signal data will be loaded here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Indicators Tab -->
+        <div id="indicators" class="tab-content">
+            <div class="section-header">
+                <h2>Technical Indicators</h2>
+                <button class="btn btn-success" onclick="loadIndicators()">Refresh</button>
+            </div>
+
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Category Filter</label>
+                    <select id="indicatorCategory" class="form-control" onchange="loadIndicators()">
+                        <option value="">All Categories</option>
+                        <option value="RSI Family">RSI Family</option>
+                        <option value="Trend Following">Trend Following</option>
+                        <option value="Volume Analysis">Volume Analysis</option>
+                        <option value="Volatility">Volatility</option>
+                        <option value="Momentum">Momentum</option>
+                        <option value="Moving Averages">Moving Averages</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Chart Type</label>
+                    <select id="indicatorType" class="form-control" onchange="loadIndicators()">
+                        <option value="">All Types</option>
+                        <option value="overlay">Chart Overlay</option>
+                        <option value="oscillator">Oscillator Panel</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table class="table" id="indicatorsTable">
+                    <thead>
+                        <tr>
+                            <th>Indicator</th>
+                            <th>Full Name</th>
+                            <th>Category</th>
+                            <th>Type</th>
+                            <th>Description</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Indicator data will be loaded here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Validation Tools Tab -->
+        <div id="validation" class="tab-content">
+            <div class="section-header">
+                <h2>Signal Validation Tools</h2>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <!-- Single Signal Validation -->
+                <div>
+                    <h3>Validate Single Signal</h3>
+                    <div class="form-group">
+                        <label>Signal Key (TXYZn Format)</label>
+                        <input type="text" id="validateSignal" class="form-control" 
+                               placeholder="e.g., BBRK7" maxlength="5">
+                        <small style="color: #718096;">Format: [B/S][XXX][1-9]</small>
+                    </div>
+                    <button class="btn" onclick="validateSingleSignal()">Validate Signal</button>
+                    <div id="singleValidationResult"></div>
+                </div>
+
+                <!-- Strategy Definition Validation -->
+                <div>
+                    <h3>Validate Strategy Definition</h3>
+                    <div class="form-group">
+                        <label>Base Strategy</label>
+                        <input type="text" id="validateStrategyKey" class="form-control" 
+                               placeholder="e.g., BBRK" maxlength="4">
+                    </div>
+                    <div class="form-group">
+                        <label>Side</label>
+                        <select id="validateStrategySide" class="form-control">
+                            <option value="B">Buy (B)</option>
+                            <option value="S">Sell (S)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Category</label>
+                        <select id="validateStrategyCategory" class="form-control">
+                            <option value="breakout">Breakout</option>
+                            <option value="mean-reversion">Mean Reversion</option>
+                            <option value="trend">Trend</option>
+                            <option value="divergence">Divergence</option>
+                            <option value="level">Level</option>
+                        </select>
+                    </div>
+                    <button class="btn" onclick="validateStrategyDefinition()">Validate Strategy</button>
+                    <div id="strategyValidationResult"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Status Tab -->
+        <div id="system" class="tab-content">
+            <div class="section-header">
+                <h2>System Status</h2>
+                <button class="btn" onclick="loadSystemStatus()">Refresh Status</button>
+            </div>
+
+            <div class="stats-grid" id="systemStats">
+                <!-- System statistics will be loaded here -->
+            </div>
+
+            <div id="systemDetails">
+                <!-- Detailed system information -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Strategy Modal -->
+    <div id="createStrategyModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Create New Strategy</h3>
+                <button class="close" onclick="hideCreateStrategyModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="createStrategyForm">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Base Strategy Code *</label>
+                            <input type="text" id="newStrategyKey" class="form-control" 
+                                   placeholder="e.g., BBRK" maxlength="4" required>
+                            <small>Format: [B/S][XXX] (e.g., BBRK, SOBR)</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Side *</label>
+                            <select id="newStrategySide" class="form-control" required>
+                                <option value="B">Buy (B)</option>
+                                <option value="S">Sell (S)</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Name Template *</label>
+                        <input type="text" id="newStrategyName" class="form-control" 
+                               placeholder="e.g., Buy • Breakout ({strength})" required>
+                        <small>Use {strength} placeholder for strength levels</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Description Template *</label>
+                        <textarea id="newStrategyDesc" class="form-control" rows="3" 
+                                  placeholder="Strategy description..." required></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Category *</label>
+                        <select id="newStrategyCategory" class="form-control" required>
+                            <option value="breakout">Breakout</option>
+                            <option value="mean-reversion">Mean Reversion</option>
+                            <option value="trend">Trend</option>
+                            <option value="divergence">Divergence</option>
+                            <option value="level">Level</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Required Indicators</label>
+                        <input type="text" id="newStrategyIndicators" class="form-control" 
+                               placeholder="e.g., close_price,volume,rsi14,ema20">
+                        <small>Comma-separated list of indicator keys</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideCreateStrategyModal()">Cancel</button>
+                <button class="btn btn-success" onclick="createStrategy()">Create Strategy</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API Configuration
+        const API_BASE = '/api'; // Adjust this to match your API endpoint
+        
+        // Global state
+        let currentTab = 'strategies';
+        let systemConfig = null;
+        
+        // Tab Management
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked tab button
+            event.target.classList.add('active');
+            
+            currentTab = tabName;
+            
+            // Load data for the selected tab
+            loadTabData(tabName);
+        }
+        
+        // Load tab-specific data
+        async function loadTabData(tabName) {
+            switch(tabName) {
+                case 'strategies':
+                    await loadStrategies();
+                    await loadStrategyStats();
+                    break;
+                case 'signals':
+                    await loadSignals();
+                    break;
+                case 'indicators':
+                    await loadIndicators();
+                    break;
+                case 'system':
+                    await loadSystemStatus();
+                    break;
+            }
+        }
+        
+        // Strategy Management Functions
+        async function loadStrategies() {
+            try {
+                const category = document.getElementById('strategyCategory').value;
+                const side = document.getElementById('strategySide').value;
+                
+                const params = new URLSearchParams();
+                if (category) params.append('category', category);
+                if (side) params.append('side', side);
+                params.append('metadata', 'true');
+                
+                const response = await fetch(`${API_BASE}/strategies?${params}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    populateStrategiesTable(data.strategies);
+                } else {
+                    showAlert('danger', `Error loading strategies: ${data.error}`);
+                }
+            } catch (error) {
+                showAlert('danger', `Network error: ${error.message}`);
+            }
+        }
+        
+        function populateStrategiesTable(strategies) {
+            const tbody = document.querySelector('#strategiesTable tbody');
+            tbody.innerHTML = '';
+            
+            strategies.forEach(strategy => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><code>${strategy.base_strategy}</code></td>
+                    <td>${strategy.name}</td>
+                    <td><span class="badge badge-${strategy.side === 'B' ? 'success' : 'danger'}">${strategy.side === 'B' ? 'Buy' : 'Sell'}</span></td>
+                    <td><span class="badge badge-info">${strategy.category}</span></td>
+                    <td>${strategy.market_conditions?.join(', ') || 'N/A'}</td>
+                    <td><span class="badge badge-warning">${strategy.implementation_complexity}</span></td>
+                    <td>
+                        <button class="btn btn-secondary" onclick="viewStrategy('${strategy.base_strategy}')">View</button>
+                        <button class="btn btn-danger" onclick="deleteStrategy('${strategy.base_strategy}')">Delete</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        async function loadStrategyStats() {
+            try {
+                const response = await fetch(`${API_BASE}/dashboard/config`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const statsHtml = `
+                        <div class="stat-card">
+                            <div class="stat-value">${data.strategy.total_base_strategies}</div>
+                            <div class="stat-label">Base Strategies</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.strategy.total_strategy_combinations}</div>
+                            <div class="stat-label">Total Combinations</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.strategy.categories.length}</div>
+                            <div class="stat-label">Categories</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.indicator.total_indicators}</div>
+                            <div class="stat-label">Indicators</div>
+                        </div>
+                    `;
+                    
+                    document.getElementById('strategyStats').innerHTML = statsHtml;
+                }
+            } catch (error) {
+                console.error('Error loading strategy stats:', error);
+            }
+        }
+        
+        // Signal Management Functions
+        async function loadSignals() {
+            try {
+                const symbol = document.getElementById('signalSymbol').value;
+                const strategyKey = document.getElementById('signalStrategy').value;
+                const minStrength = document.getElementById('signalStrength').value;
+                
+                const params = new URLSearchParams();
+                if (symbol) params.append('symbol', symbol);
+                if (strategyKey) params.append('strategy_key', strategyKey);
+                if (minStrength) params.append('min_strength', minStrength);
+                params.append('limit', '100');
+                
+                const response = await fetch(`${API_BASE}/signals?${params}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    populateSignalsTable(data.signals);
+                } else {
+                    showAlert('danger', `Error loading signals: ${data.error}`);
+                }
+            } catch (error) {
+                showAlert('danger', `Network error: ${error.message}`);
+            }
+        }
+        
+        function populateSignalsTable(signals) {
+            const tbody = document.querySelector('#signalsTable tbody');
+            tbody.innerHTML = '';
+            
+            signals.forEach(signal => {
+                const row = document.createElement('tr');
+                const strengthColor = getStrengthColor(signal.action, signal.strength);
+                const reasonsText = Array.isArray(signal.reasons) ? signal.reasons.join('; ') : 'N/A';
+                
+                row.innerHTML = `
+                    <td>${signal.bar_date}</td>
+                    <td><code>${signal.symbol}</code></td>
+                    <td><code style="color: ${strengthColor};">${signal.strategy_key}</code></td>
+                    <td><span class="badge badge-${signal.action === 'B' ? 'success' : 'danger'}">${signal.action === 'B' ? 'Buy' : 'Sell'}</span></td>
+                    <td><span style="color: ${strengthColor}; font-weight: bold;">${signal.strength}</span></td>
+                    <td>${signal.close_at_signal ? signal.close_at_signal.toFixed(3) : 'N/A'}</td>
+                    <td>${signal.volume_at_signal ? signal.volume_at_signal.toLocaleString() : 'N/A'}</td>
+                    <td title="${reasonsText}">${reasonsText.length > 50 ? reasonsText.substring(0, 50) + '...' : reasonsText}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        function getStrengthColor(action, strength) {
+            if (action === 'B') {
+                if (strength >= 7) return '#006400';
+                if (strength >= 4) return '#32CD32';
+                return '#90EE90';
+            } else {
+                if (strength >= 7) return '#DC143C';
+                if (strength >= 4) return '#FF1493';
+                return '#FFB6C1';
+            }
+        }
+        
+        // Indicator Management Functions
+        async function loadIndicators() {
+            try {
+                const category = document.getElementById('indicatorCategory').value;
+                const overlayOnly = document.getElementById('indicatorType').value === 'overlay';
+                
+                const params = new URLSearchParams();
+                if (category) params.append('category', category);
+                if (overlayOnly) params.append('overlay_only', 'true');
+                
+                const response = await fetch(`${API_BASE}/indicators?${params}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    populateIndicatorsTable(data.indicators);
+                } else {
+                    showAlert('danger', `Error loading indicators: ${data.error}`);
+                }
+            } catch (error) {
+                showAlert('danger', `Network error: ${error.message}`);
+            }
+        }
+        
+        function populateIndicatorsTable(indicators) {
+            const tbody = document.querySelector('#indicatorsTable tbody');
+            tbody.innerHTML = '';
+            
+            indicators.forEach(indicator => {
+                const row = document.createElement('tr');
+                const chartType = indicator.is_overlay ? 'Overlay' : indicator.is_oscillator ? 'Oscillator' : 'Other';
+                const typeBadge = indicator.is_overlay ? 'badge-success' : 'badge-info';
+                
+                row.innerHTML = `
+                    <td><code>${indicator.indicator_key}</code></td>
+                    <td>${indicator.full_name}</td>
+                    <td><span class="badge badge-info">${indicator.category}</span></td>
+                    <td><span class="badge ${typeBadge}">${chartType}</span></td>
+                    <td title="${indicator.description}">${indicator.description.length > 60 ? indicator.description.substring(0, 60) + '...' : indicator.description}</td>
+                    <td>
+                        <button class="btn btn-secondary" onclick="viewIndicator('${indicator.indicator_key}')">View Details</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        // Validation Functions
+        async function validateSingleSignal() {
+            const signalKey = document.getElementById('validateSignal').value.trim().toUpperCase();
+            
+            if (!signalKey) {
+                showAlert('danger', 'Please enter a signal key');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/signals/validate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ signal: signalKey })
+                });
+                
+                const data = await response.json();
+                
+                displayValidationResult('singleValidationResult', data);
+            } catch (error) {
+                showAlert('danger', `Validation error: ${error.message}`);
+            }
+        }
+        
+        async function validateStrategyDefinition() {
+            const strategyData = {
+                base_strategy: document.getElementById('validateStrategyKey').value.trim().toUpperCase(),
+                side: document.getElementById('validateStrategySide').value,
+                category: document.getElementById('validateStrategyCategory').value,
+                name_template: "Test Strategy ({strength})",
+                description_template: "Test strategy description",
+                required_indicators: ["close_price"],
+                default_parameters: {}
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}/strategies/validate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(strategyData)
+                });
+                
+                const data = await response.json();
+                
+                displayValidationResult('strategyValidationResult', data);
+            } catch (error) {
+                showAlert('danger', `Validation error: ${error.message}`);
+            }
+        }
+        
+        function displayValidationResult(containerId, result) {
+            const container = document.getElementById(containerId);
+            const validClass = result.is_valid ? 'valid' : 'invalid';
+            const statusText = result.is_valid ? '✅ Valid' : '❌ Invalid';
+            
+            let html = `
+                <div class="validation-result ${validClass}">
+                    <h4>${statusText}</h4>
+            `;
+            
+            if (result.errors && result.errors.length > 0) {
+                html += '<h5>Errors:</h5><ul class="error-list">';
+                result.errors.forEach(error => {
+                    html += `<li>${error}</li>`;
+                });
+                html += '</ul>';
+            }
+            
+            if (result.warnings && result.warnings.length > 0) {
+                html += '<h5>Warnings:</h5><ul class="error-list">';
+                result.warnings.forEach(warning => {
+                    html += `<li style="color: #d69e2e;">${warning}</li>`;
+                });
+                html += '</ul>';
+            }
+            
+            if (result.suggestions && result.suggestions.length > 0) {
+                html += '<h5>Suggestions:</h5><ul class="suggestion-list">';
+                result.suggestions.forEach(suggestion => {
+                    html += `<li>${suggestion}</li>`;
+                });
+                html += '</ul>';
+            }
+            
+            html += '</div>';
+            
+            container.innerHTML = html;
+        }
+        
+        // System Status Functions
+        async function loadSystemStatus() {
+            try {
+                const [statusResponse, healthResponse] = await Promise.all([
+                    fetch(`${API_BASE}/system/status`),
+                    fetch(`${API_BASE}/system/health`)
+                ]);
+                
+                const statusData = await statusResponse.json();
+                const healthData = await healthResponse.json();
+                
+                if (statusResponse.ok) {
+                    displaySystemStats(statusData);
+                    displaySystemDetails(statusData, healthData);
+                }
+            } catch (error) {
+                showAlert('danger', `System status error: ${error.message}`);
+            }
+        }
+        
+        function displaySystemStats(data) {
+            const statsHtml = `
+                <div class="stat-card">
+                    <div class="stat-value">${data.components.strategy_dictionary.total_base_strategies}</div>
+                    <div class="stat-label">Base Strategies</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.components.signal_dictionary.active_signal_types}</div>
+                    <div class="stat-label">Active Signal Types</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.components.indicator_dictionary.total_indicators}</div>
+                    <div class="stat-label">Technical Indicators</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.components.database.tables_available.length}</div>
+                    <div class="stat-label">Database Tables</div>
+                </div>
+            `;
+            
+            document.getElementById('systemStats').innerHTML = statsHtml;
+        }
+        
+        function displaySystemDetails(statusData, healthData) {
+            const html = `
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                    <div>
+                        <h3>System Health</h3>
+                        <div class="alert alert-${healthData.status === 'healthy' ? 'success' : 'danger'}">
+                            <strong>Status:</strong> ${healthData.status.toUpperCase()}<br>
+                            <strong>Last Check:</strong> ${new Date(healthData.timestamp).toLocaleString()}
+                        </div>
+                        
+                        <h4>Health Checks:</h4>
+                        <ul>
+                            ${Object.entries(healthData.checks).map(([check, status]) => 
+                                `<li>${check}: <span class="badge badge-${status === 'ok' ? 'success' : 'danger'}">${status}</span></li>`
+                            ).join('')}
+                        </ul>
+                    </div>
+                    
+                    <div>
+                        <h3>Component Details</h3>
+                        <h4>Database Tables:</h4>
+                        <ul>
+                            ${statusData.components.database.tables_available.map(table => 
+                                `<li><code>${table}</code></li>`
+                            ).join('')}
+                        </ul>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('systemDetails').innerHTML = html;
+        }
+        
+        // Modal Functions
+        function showCreateStrategyModal() {
+            document.getElementById('createStrategyModal').classList.add('active');
+        }
+        
+        function hideCreateStrategyModal() {
+            document.getElementById('createStrategyModal').classList.remove('active');
+            document.getElementById('createStrategyForm').reset();
+        }
+        
+        async function createStrategy() {
+            const formData = {
+                base_strategy: document.getElementById('newStrategyKey').value.trim().toUpperCase(),
+                side: document.getElementById('newStrategySide').value,
+                name_template: document.getElementById('newStrategyName').value.trim(),
+                description_template: document.getElementById('newStrategyDesc').value.trim(),
+                category: document.getElementById('newStrategyCategory').value,
+                required_indicators: document.getElementById('newStrategyIndicators').value
+                    .split(',').map(s => s.trim()).filter(s => s),
+                default_parameters: {}
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}/strategies`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showAlert('success', `Strategy created successfully! Created ${data.count} strategy variants.`);
+                    hideCreateStrategyModal();
+                    loadStrategies();
+                    loadStrategyStats();
+                } else {
+                    showAlert('danger', `Error creating strategy: ${data.error}`);
+                }
+            } catch (error) {
+                showAlert('danger', `Network error: ${error.message}`);
+            }
+        }
+        
+        // Utility Functions
+        function showAlert(type, message) {
+            const alertHtml = `
+                <div class="alert alert-${type}" style="margin-top: 1rem;">
+                    ${message}
+                </div>
+            `;
+            
+            // Show alert at the top of the current tab
+            const currentTabContent = document.querySelector('.tab-content.active');
+            const existingAlert = currentTabContent.querySelector('.alert');
+            if (existingAlert) {
+                existingAlert.remove();
+            }
+            
+            currentTabContent.insertAdjacentHTML('afterbegin', alertHtml);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                const alert = currentTabContent.querySelector('.alert');
+                if (alert) alert.remove();
+            }, 5000);
+        }
+        
+        // Placeholder functions for additional features
+        function viewStrategy(baseStrategy) {
+            showAlert('info', `Viewing strategy: ${baseStrategy} (Feature in development)`);
+        }
+        
+        function deleteStrategy(baseStrategy) {
+            if (confirm(`Are you sure you want to delete strategy ${baseStrategy} and all its variants?`)) {
+                showAlert('info', `Deleting strategy: ${baseStrategy} (Feature in development)`);
+            }
+        }
+        
+        function viewIndicator(indicatorKey) {
+            showAlert('info', `Viewing indicator: ${indicatorKey} (Feature in development)`);
+        }
+        
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            loadTabData('strategies');
+        });
+    </script>
+</body>
+</html>

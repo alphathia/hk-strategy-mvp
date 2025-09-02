@@ -813,6 +813,465 @@ def get_company_name(symbol):
         return 'Unknown Company'
 
 @st.cache_data
+def get_all_portfolios_for_equity_analysis():
+    """Get all available portfolios for equity analysis selection"""
+    try:
+        portfolios = []
+        if 'portfolios' in st.session_state and st.session_state.portfolios:
+            for portfolio_id, portfolio_data in st.session_state.portfolios.items():
+                portfolios.append({
+                    'portfolio_id': portfolio_id,
+                    'name': portfolio_data.get('name', portfolio_id) if isinstance(portfolio_data, dict) else portfolio_id
+                })
+        
+        # Add "All Portfolio Overview" option
+        portfolios.insert(0, {
+            'portfolio_id': 'all_overview',
+            'name': 'All Portfolio Overview'
+        })
+        
+        return portfolios
+    except Exception as e:
+        st.error(f"Error loading portfolios: {e}")
+        return [{
+            'portfolio_id': 'all_overview',
+            'name': 'All Portfolio Overview'
+        }]
+
+@st.cache_data
+def get_portfolio_analyses_for_equity(portfolio_id: str):
+    """Get all portfolio analyses for a specific portfolio"""
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT id, name, start_date, end_date
+            FROM portfolio_analyses
+            WHERE name ILIKE %s
+            ORDER BY created_at DESC
+        """, (f"%{portfolio_id}%",))
+        
+        results = cur.fetchall()
+        conn.close()
+        
+        return [{'id': r[0], 'name': r[1], 'start_date': r[2], 'end_date': r[3]} for r in results]
+    except:
+        return []
+
+def get_equities_from_portfolio(portfolio_id: str):
+    """Get all equities/symbols from a specific portfolio (both active and inactive positions)"""
+    try:
+        # Validate that portfolio data exists in session state
+        if 'portfolios' not in st.session_state or not st.session_state.portfolios:
+            if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                st.warning("⚠️ Debug: No portfolio data found in session state")
+            return []
+        
+        if portfolio_id == 'all_overview':
+            # For "All Portfolio Overview", get all unique equities from all portfolios
+            all_equities = []
+            for pid, portfolio_data in st.session_state.portfolios.items():
+                if 'positions' in portfolio_data and portfolio_data['positions']:
+                    for position in portfolio_data['positions']:
+                        equity = {
+                            'symbol': position['symbol'],
+                            'company_name': position.get('company_name', 'Unknown Company')
+                        }
+                        # Avoid duplicates by checking if equity already exists
+                        if not any(e['symbol'] == equity['symbol'] for e in all_equities):
+                            all_equities.append(equity)
+            
+            # Debug output
+            if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                st.info(f"🔍 Debug: Found {len(all_equities)} unique equities across all portfolios")
+            
+            return all_equities
+            
+        elif portfolio_id in st.session_state.portfolios:
+            # Get positions from the specific portfolio
+            portfolio_data = st.session_state.portfolios[portfolio_id]
+            if 'positions' in portfolio_data and portfolio_data['positions']:
+                equities = []
+                active_count = 0
+                inactive_count = 0
+                
+                for position in portfolio_data['positions']:
+                    equity = {
+                        'symbol': position['symbol'],
+                        'company_name': position.get('company_name', 'Unknown Company')
+                    }
+                    equities.append(equity)
+                    
+                    # Count active vs inactive for debug
+                    if position.get('quantity', 0) > 0:
+                        active_count += 1
+                    else:
+                        inactive_count += 1
+                
+                # Debug output
+                if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                    st.info(f"🔍 Debug: Portfolio {portfolio_id} has {len(equities)} total equities ({active_count} active, {inactive_count} inactive)")
+                
+                return equities
+            else:
+                # Portfolio exists but has no positions
+                if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                    st.info(f"🔍 Debug: Portfolio {portfolio_id} exists but has no positions")
+                return []
+        else:
+            # Portfolio ID not found
+            if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                st.warning(f"⚠️ Debug: Portfolio {portfolio_id} not found in session state")
+            return []
+            
+    except Exception as e:
+        st.error(f"❌ Error loading equities for portfolio {portfolio_id}: {str(e)}")
+        if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+            st.error(f"🔍 Debug: Exception details: {type(e).__name__}: {e}")
+        return []
+
+def convert_for_database(value):
+    """Convert NumPy/pandas values to database-compatible Python types"""
+    import numpy as np
+    import pandas as pd
+    
+    try:
+        # Handle None values first
+        if value is None:
+            return None
+        
+        # Handle pandas Timestamp early (before numeric checks)
+        if isinstance(value, pd.Timestamp):
+            return value.date()
+        
+        # Handle Python native date/datetime objects
+        if hasattr(value, 'date') and callable(getattr(value, 'date')):
+            if hasattr(value, 'time'):  # datetime object
+                return value.date()
+            else:  # date object
+                return value
+        
+        # Handle string types early
+        # Handle NumPy 2.0 compatibility (np.unicode_ was removed)
+        string_types = [str, np.str_]
+        try:
+            string_types.append(np.unicode_)  # For NumPy < 2.0
+        except AttributeError:
+            pass  # NumPy 2.0+ doesn't have np.unicode_
+        
+        if isinstance(value, tuple(string_types)):
+            return str(value)
+        
+        # Handle boolean types (before numeric checks to avoid conversion issues)
+        # Handle NumPy 2.0 compatibility (np.bool8 was removed)
+        bool_types = [bool, np.bool_]
+        try:
+            bool_types.append(np.bool8)  # For NumPy < 2.0
+        except AttributeError:
+            pass  # NumPy 2.0+ doesn't have np.bool8
+        
+        if isinstance(value, tuple(bool_types)):
+            return bool(value)
+        
+        # Now handle numeric types with proper validation
+        # Check for NaN only on numeric-like values
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            # pd.isna() failed, value is likely not numeric-compatible
+            pass
+        
+        # Check for infinity only on float types that support it
+        try:
+            # Only check infinity for float types (int cannot be infinite)
+            if isinstance(value, (float, np.floating)) and np.isinf(value):
+                return None
+        except (TypeError, ValueError):
+            # np.isinf() failed, continue with other conversions
+            pass
+        
+        # Convert NumPy numeric types to Python native types
+        if isinstance(value, (np.integer, np.signedinteger, np.unsignedinteger)):
+            return int(value)
+        elif isinstance(value, (np.floating, np.float64, np.float32, np.float16)):
+            # Convert to Python float first
+            python_float = float(value)
+            # Check if this float is actually a whole number (for BIGINT compatibility)
+            if python_float.is_integer():
+                return int(python_float)
+            return python_float
+        
+        # Handle Python native numeric types
+        if isinstance(value, (int, float)):
+            # Check if float values are whole numbers (for BIGINT compatibility)
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            return value
+        
+        # Handle complex numbers (convert to None as database can't store them)
+        if isinstance(value, (complex, np.complex64, np.complex128)):
+            return None
+        
+        # Handle array-like objects by taking first element or converting to string
+        if hasattr(value, '__iter__') and not isinstance(value, str):
+            try:
+                # If it's a single-element array/series, extract the value
+                if hasattr(value, '__len__') and len(value) == 1:
+                    return convert_for_database(value[0])
+                elif hasattr(value, '__len__') and len(value) == 0:
+                    return None
+                else:
+                    # Multi-element array, convert to string representation
+                    return str(value)
+            except:
+                return str(value)
+        
+        # Fallback: return as-is for unhandled Python native types
+        return value
+        
+    except Exception as e:
+        # Enhanced error handling for conversion failures
+        try:
+            import streamlit as st
+            if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                st.error(f"🔍 Debug: Conversion failed for value: {repr(value)} (type: {type(value)})")
+                st.error(f"🔍 Debug: Conversion error: {str(e)}")
+        except:
+            # If streamlit debug fails, ignore and continue
+            pass
+        
+        # Fallback to string conversion or None
+        try:
+            return str(value)
+        except:
+            return None
+
+@st.cache_data
+def fetch_and_store_yahoo_data(symbol: str, start_date: str, end_date: str):
+    """Fetch data from Yahoo Finance and store in database if missing"""
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        import pandas as pd
+        import numpy as np
+        
+        # Check existing data coverage in database
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT MIN(trade_date), MAX(trade_date), COUNT(*)
+                FROM daily_equity_technicals
+                WHERE symbol = %s
+                  AND trade_date >= %s
+                  AND trade_date <= %s
+            """, (symbol, start_date, end_date))
+            
+            result = cur.fetchone()
+            existing_start, existing_end, count = result
+            
+            # Convert dates to datetime objects
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            
+            # Calculate expected trading days (rough estimate)
+            expected_days = (end_dt - start_dt).days
+            data_coverage = count / max(expected_days * 0.7, 1)  # Assume ~70% are trading days
+            
+            needs_fetching = False
+            if count == 0 or data_coverage < 0.8:  # Less than 80% coverage
+                needs_fetching = True
+            elif existing_start is None or existing_end is None:
+                needs_fetching = True
+            elif existing_start > start_dt.date() or existing_end < end_dt.date():
+                needs_fetching = True
+            
+            if needs_fetching:
+                # Fetch data from Yahoo Finance
+                st.info(f"📊 Fetching data for {symbol} from Yahoo Finance...")
+                
+                ticker = yf.Ticker(symbol)
+                hist_data = ticker.history(start=start_dt, end=end_dt + timedelta(days=1))
+                
+                if not hist_data.empty:
+                    # Calculate technical indicators
+                    hist_data['rsi_14'] = calculate_rsi(hist_data['Close'], 14)
+                    hist_data['sma_20'] = hist_data['Close'].rolling(window=20).mean()
+                    hist_data['ema_12'] = hist_data['Close'].ewm(span=12).mean()
+                    hist_data['ema_26'] = hist_data['Close'].ewm(span=26).mean()
+                    
+                    # Calculate MACD
+                    hist_data['macd'] = hist_data['ema_12'] - hist_data['ema_26']
+                    hist_data['macd_signal'] = hist_data['macd'].ewm(span=9).mean()
+                    
+                    # Calculate Bollinger Bands
+                    bb_period = 20
+                    bb_std = 2
+                    sma = hist_data['Close'].rolling(window=bb_period).mean()
+                    std = hist_data['Close'].rolling(window=bb_period).std()
+                    hist_data['bollinger_upper'] = sma + (std * bb_std)
+                    hist_data['bollinger_lower'] = sma - (std * bb_std)
+                    
+                    # Volume SMA
+                    hist_data['volume_sma_20'] = hist_data['Volume'].rolling(window=20).mean()
+                    
+                    # Insert/update data in database
+                    for date, row in hist_data.iterrows():
+                        cur.execute("""
+                            INSERT INTO daily_equity_technicals (
+                                symbol, trade_date, open_price, close_price, high_price, low_price, volume,
+                                rsi_14, macd, macd_signal, bollinger_upper, bollinger_lower, 
+                                sma_20, ema_12, ema_26, volume_sma_20
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (symbol, trade_date) 
+                            DO UPDATE SET
+                                open_price = EXCLUDED.open_price,
+                                close_price = EXCLUDED.close_price,
+                                high_price = EXCLUDED.high_price,
+                                low_price = EXCLUDED.low_price,
+                                volume = EXCLUDED.volume,
+                                rsi_14 = EXCLUDED.rsi_14,
+                                macd = EXCLUDED.macd,
+                                macd_signal = EXCLUDED.macd_signal,
+                                bollinger_upper = EXCLUDED.bollinger_upper,
+                                bollinger_lower = EXCLUDED.bollinger_lower,
+                                sma_20 = EXCLUDED.sma_20,
+                                ema_12 = EXCLUDED.ema_12,
+                                ema_26 = EXCLUDED.ema_26,
+                                volume_sma_20 = EXCLUDED.volume_sma_20
+                        """, (
+                            symbol, 
+                            convert_for_database(date.date()), 
+                            convert_for_database(row['Open']), 
+                            convert_for_database(row['Close']), 
+                            convert_for_database(row['High']), 
+                            convert_for_database(row['Low']), 
+                            convert_for_database(row['Volume']),
+                            convert_for_database(row.get('rsi_14')), 
+                            convert_for_database(row.get('macd')), 
+                            convert_for_database(row.get('macd_signal')),
+                            convert_for_database(row.get('bollinger_upper')), 
+                            convert_for_database(row.get('bollinger_lower')),
+                            convert_for_database(row.get('sma_20')), 
+                            convert_for_database(row.get('ema_12')), 
+                            convert_for_database(row.get('ema_26')), 
+                            convert_for_database(row.get('volume_sma_20'))
+                        ))
+                    
+                    conn.commit()
+                    st.success(f"✅ Successfully fetched and stored {len(hist_data)} days of data for {symbol}")
+                    return True
+                else:
+                    st.warning(f"⚠️ No data available for {symbol} in Yahoo Finance")
+                    return False
+            else:
+                st.info(f"✅ Data for {symbol} already available in database")
+                return True
+                
+    except Exception as e:
+        # Enhanced error handling with specific error types
+        error_msg = str(e)
+        
+        if "np." in error_msg or "numpy" in error_msg.lower():
+            st.error(f"❌ Data type conversion error for {symbol}: NumPy types detected in database insertion")
+            st.error("🔧 This suggests a data conversion issue. Please enable Debug Mode for more details.")
+        elif "does not exist" in error_msg and "schema" in error_msg:
+            st.error(f"❌ Database schema error for {symbol}: {error_msg}")
+            st.error("🔧 This suggests improper data types being passed to PostgreSQL")
+        else:
+            st.error(f"❌ Error fetching data for {symbol}: {error_msg}")
+        
+        # Debug information
+        if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+            st.error(f"🔍 Debug: Full exception details:")
+            st.error(f"Exception type: {type(e).__name__}")
+            st.error(f"Exception message: {error_msg}")
+            
+            # Try to show some sample data types if available
+            try:
+                import yfinance as yf
+                from datetime import datetime, timedelta
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                ticker = yf.Ticker(symbol)
+                sample_data = ticker.history(start=start_dt, end=end_dt, period="5d")
+                
+                if not sample_data.empty:
+                    row = sample_data.iloc[0]
+                    st.error("🔍 Debug: Sample data types:")
+                    for col in ['Open', 'Close', 'High', 'Low', 'Volume']:
+                        if col in row:
+                            st.error(f"  {col}: {type(row[col])} = {row[col]}")
+            except:
+                pass
+        
+        return False
+
+def calculate_rsi(prices, window=14):
+    """Calculate RSI indicator with enhanced error handling"""
+    try:
+        import numpy as np
+        
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        
+        # Handle division by zero more carefully
+        # Replace zero losses with a small value to avoid infinite RS values
+        loss = loss.replace(0, np.nan)
+        rs = gain / loss
+        
+        # Handle infinite and NaN values before final calculation
+        rs = rs.replace([np.inf, -np.inf], np.nan)
+        
+        # Calculate RSI, handling NaN values
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Clean up any remaining problematic values
+        rsi = rsi.replace([np.inf, -np.inf], np.nan)
+        
+        return rsi
+        
+    except Exception as e:
+        # Enhanced error reporting
+        try:
+            import streamlit as st
+            if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                st.error(f"🔍 Debug RSI Error: {str(e)}")
+                st.error(f"🔍 Debug RSI Prices Shape: {prices.shape if hasattr(prices, 'shape') else 'No shape'}")
+                st.error(f"🔍 Debug RSI Prices Type: {type(prices)}")
+        except:
+            pass
+        return None
+
+@st.cache_data
+def get_analysis_period_for_equity(analysis_id: int):
+    """Get the analysis period (start_date, end_date) for a specific analysis"""
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT start_date, end_date, name
+            FROM portfolio_analyses
+            WHERE id = %s
+        """, (analysis_id,))
+        
+        result = cur.fetchone()
+        conn.close()
+        
+        if result:
+            return {'start_date': result[0], 'end_date': result[1], 'name': result[2]}
+        return None
+    except:
+        return None
+
+@st.cache_data
 def fetch_technical_analysis_data(symbol: str):
     """Fetch technical analysis data from daily_equity_technicals table"""
     try:
@@ -2943,6 +3402,9 @@ elif st.session_state.current_page == 'pv_analysis':
                                             'end_date': str(analysis_info['end_date'])
                                         }
                                         st.session_state.current_page = 'equity_analysis'
+                                        # Update navigation state for correct breadcrumbs
+                                        st.session_state.navigation['section'] = 'strategy'
+                                        st.session_state.navigation['page'] = 'equity_analysis'
                                         st.rerun()
                             
                             st.markdown("---")
@@ -2960,20 +3422,239 @@ elif st.session_state.current_page == 'equity_analysis':
     # Equity Strategy Analysis Dashboard
     st.subheader("📈 Equity Strategy Analysis")
     
-    # Check if we have equity context from navigation
-    if 'equity_context' not in st.session_state:
-        st.warning("⚠️ No equity context found. Please navigate here from a portfolio analysis.")
-        st.info("To access this page, go to Portfolio Analysis and click on a company name.")
-    else:
+    # Debug toggle for troubleshooting
+    debug_col1, debug_col2 = st.columns([4, 1])
+    with debug_col2:
+        debug_mode = st.checkbox("🔍 Debug Mode", help="Enable debug information for troubleshooting equity population")
+        st.session_state.debug_mode = debug_mode
+    
+    # Independent selection interface
+    # Get all portfolios for selection
+    portfolios = get_all_portfolios_for_equity_analysis()
+    
+    # Initialize selection state - simplified (no analysis selection needed)
+    if 'equity_portfolio_id' not in st.session_state:
+        st.session_state.equity_portfolio_id = None
+    if 'equity_symbol' not in st.session_state:
+        st.session_state.equity_symbol = None
+    
+    # Check if we came from portfolio analysis or overview navigation
+    if 'equity_context' in st.session_state:
         equity_ctx = st.session_state.equity_context
+        # Pre-populate selections from context
+        for p in portfolios:
+            if p['name'] == equity_ctx.get('portfolio_name'):
+                st.session_state.equity_portfolio_id = p['portfolio_id']
+                break
+    
+    # Handle navigation from All Portfolio Overview → stock selection
+    # This handles the case where user clicks on a stock from the portfolio table
+    if not st.session_state.equity_portfolio_id and 'selected_stock_context' in st.session_state:
+        # Set default to "All Portfolio Overview" when coming from stock selection
+        st.session_state.equity_portfolio_id = 'all_overview'
+        stock_ctx = st.session_state.selected_stock_context
+        st.session_state.equity_symbol = stock_ctx.get('symbol')
         
-        # Display context information
-        st.info(f"**Portfolio:** {equity_ctx['portfolio_name']}")
-        st.info(f"**Portfolio Analysis:** {equity_ctx['portfolio_analysis_name']}")
-        st.info(f"**Stock:** {equity_ctx['symbol']} - {equity_ctx['company_name']}")
-        st.info(f"**Analysis Period:** {equity_ctx['start_date']} to {equity_ctx['end_date']}")
+    # Initialize date selection state with 12-month default
+    from datetime import datetime, timedelta
+    if 'equity_start_date' not in st.session_state:
+        st.session_state.equity_start_date = datetime.now().date() - timedelta(days=365)  # 12 months ago
+    if 'equity_end_date' not in st.session_state:
+        st.session_state.equity_end_date = datetime.now().date()
+    
+    # Date Selection Panel
+    st.markdown("#### 📅 Analysis Period")
+    date_col1, date_col2, date_col3 = st.columns([2, 2, 1])
+    
+    with date_col1:
+        start_date = st.date_input(
+            "Start Date",
+            value=st.session_state.equity_start_date,
+            max_value=datetime.now().date(),
+            key="equity_start_date_picker"
+        )
+        st.session_state.equity_start_date = start_date
+    
+    with date_col2:
+        end_date = st.date_input(
+            "End Date",
+            value=st.session_state.equity_end_date,
+            min_value=st.session_state.equity_start_date,
+            max_value=datetime.now().date(),
+            key="equity_end_date_picker"
+        )
+        st.session_state.equity_end_date = end_date
+    
+    with date_col3:
+        st.markdown("<br>", unsafe_allow_html=True)  # Align button
+        if st.button("📅 Reset to 12M", help="Reset to 12 months ago"):
+            st.session_state.equity_start_date = datetime.now().date() - timedelta(days=365)
+            st.session_state.equity_end_date = datetime.now().date()
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Selection interface - simplified to Portfolio → Equity only
+    select_col1, select_col2, go_col = st.columns([3, 4, 1])
+    
+    with select_col1:
+        portfolio_options = [f"{p['portfolio_id']} ({p['name']})" for p in portfolios]
+        selected_portfolio_display = st.selectbox(
+            "📁 Portfolio",
+            options=portfolio_options,
+            index=0 if portfolio_options else None,
+            key="portfolio_selector"
+        )
+        
+        if selected_portfolio_display:
+            selected_portfolio_id = selected_portfolio_display.split(' ')[0]
+            
+            # Clear equity selection if portfolio changes
+            if st.session_state.equity_portfolio_id != selected_portfolio_id:
+                st.session_state.equity_symbol = None  # Reset equity selection
+                
+            st.session_state.equity_portfolio_id = selected_portfolio_id
+    
+    with select_col2:
+        if st.session_state.equity_portfolio_id:
+            equities = get_equities_from_portfolio(st.session_state.equity_portfolio_id)
+            
+            if equities:
+                equity_options = [f"{e['symbol']} - {e['company_name']}" for e in equities]
+                
+                # Show count of available equities
+                portfolio_name = next(p['name'] for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
+                
+                # Find current selection index if symbol is pre-selected
+                current_index = 0
+                if st.session_state.equity_symbol:
+                    for i, option in enumerate(equity_options):
+                        if option.startswith(st.session_state.equity_symbol):
+                            current_index = i
+                            break
+                
+                selected_equity_display = st.selectbox(
+                    f"📈 Equity ({len(equity_options)} available)",
+                    options=equity_options,
+                    index=current_index,
+                    key="equity_selector",
+                    help=f"All equities from {portfolio_name} (including both active and inactive positions)"
+                )
+                
+                if selected_equity_display:
+                    selected_symbol = selected_equity_display.split(' - ')[0]
+                    st.session_state.equity_symbol = selected_symbol
+            else:
+                # No equities found
+                portfolio_name = next(p['name'] for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
+                st.selectbox(
+                    "📈 Equity", 
+                    options=[], 
+                    disabled=True,
+                    help=f"No equities found in {portfolio_name}"
+                )
+                st.warning(f"⚠️ No equities found in portfolio '{portfolio_name}'. Please select a different portfolio.")
+        else:
+            st.selectbox("📈 Equity", options=[], disabled=True, help="Select a portfolio first")
+    
+    with go_col:
+        st.markdown("<br>", unsafe_allow_html=True)  # Align button with selectboxes
+        # Enable "Go" button if portfolio and equity are selected
+        can_proceed = bool(st.session_state.equity_portfolio_id and st.session_state.equity_symbol)
+        go_clicked = st.button("🚀 Go", type="primary", disabled=not can_proceed)
+    
+    # Process analysis when Go is clicked
+    if go_clicked and can_proceed:
+        # Get selected portfolio and equity info
+        selected_portfolio = next(p for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
+        selected_equity = next(e for e in get_equities_from_portfolio(st.session_state.equity_portfolio_id) 
+                             if e['symbol'] == st.session_state.equity_symbol)
+        
+        # Always use custom date range from date pickers
+        start_date_str = st.session_state.equity_start_date.strftime('%Y-%m-%d')
+        end_date_str = st.session_state.equity_end_date.strftime('%Y-%m-%d')
+        analysis_name = "Custom Date Range"
+        
+        # Fetch and ensure data availability from Yahoo Finance
+        data_fetched = fetch_and_store_yahoo_data(
+            st.session_state.equity_symbol,
+            start_date_str,
+            end_date_str
+        )
+        
+        if data_fetched:
+            equity_ctx = {
+                'portfolio_id': st.session_state.equity_portfolio_id,
+                'portfolio_name': selected_portfolio['name'],
+                'portfolio_analysis_name': analysis_name,
+                'symbol': st.session_state.equity_symbol,
+                'company_name': selected_equity['company_name'],
+                'start_date': start_date_str,
+                'end_date': end_date_str
+            }
+            
+            # Store in session state
+            st.session_state.equity_context = equity_ctx
+        else:
+            st.error("❌ Failed to fetch data. Please try again or select a different date range.")
+            st.stop()
+        
+        # Display context information in compact single row
+        st.markdown("---")
+        info_col1, info_col2, info_col3, info_col4, info_col5 = st.columns([1, 1.5, 1.5, 2, 1.5])
+        with info_col1:
+            st.metric("Analysis", "Equity Strategy")
+        with info_col2:
+            st.metric("Portfolio", equity_ctx['portfolio_name'])
+        with info_col3:
+            st.metric("Analysis", equity_ctx['portfolio_analysis_name'][:20] + "..." if len(equity_ctx['portfolio_analysis_name']) > 20 else equity_ctx['portfolio_analysis_name'])
+        with info_col4:
+            st.metric("Stock", f"{equity_ctx['symbol']} - {equity_ctx['company_name'][:15] + '...' if len(equity_ctx['company_name']) > 15 else equity_ctx['company_name']}")
+        with info_col5:
+            st.metric("Period", f"{equity_ctx['start_date']} to {equity_ctx['end_date']}")
         
         st.markdown("---")
+        
+        # Configurable Technical Indicators Selection
+        st.markdown("#### ⚙️ Technical Indicators Configuration")
+        
+        # Maximum number of indicators (configurable, not hardcoded)
+        MAX_INDICATORS = 3
+        
+        # Available technical indicators from database
+        available_indicators = [
+            ("RSI (14)", "rsi_14"),
+            ("MACD", "macd"),
+            ("MACD Signal", "macd_signal"),
+            ("SMA (20)", "sma_20"),
+            ("EMA (12)", "ema_12"),
+            ("EMA (26)", "ema_26"),
+            ("Bollinger Upper", "bollinger_upper"),
+            ("Bollinger Lower", "bollinger_lower"),
+            ("Volume SMA (20)", "volume_sma_20")
+        ]
+        
+        # Multi-select for indicators with configurable limit
+        indicator_col1, indicator_col2 = st.columns([3, 1])
+        with indicator_col1:
+            selected_indicators = st.multiselect(
+                f"Select up to {MAX_INDICATORS} technical indicators to overlay on the price chart:",
+                options=[f"{name} ({code})" for name, code in available_indicators],
+                default=[],
+                max_selections=MAX_INDICATORS,
+                key="indicator_selector"
+            )
+        
+        with indicator_col2:
+            overlay_enabled = st.checkbox("Enable Indicators", value=True, disabled=not selected_indicators)
+        
+        # Parse selected indicator codes
+        selected_indicator_codes = []
+        if selected_indicators and overlay_enabled:
+            for selection in selected_indicators:
+                # Extract code from "Name (code)" format
+                code = selection.split('(')[-1].replace(')', '')
+                selected_indicator_codes.append(code)
         
         # Candlestick Chart Section
         st.markdown(f"### 📊 {equity_ctx['symbol']} Price Chart")
@@ -2985,10 +3666,37 @@ elif st.session_state.current_page == 'equity_analysis':
             start_dt = datetime.strptime(equity_ctx['start_date'], '%Y-%m-%d')
             end_dt = datetime.strptime(equity_ctx['end_date'], '%Y-%m-%d')
             
-            with st.spinner(f"Loading price data for {equity_ctx['symbol']}..."):
+            with st.spinner(f"Loading price data and technical indicators for {equity_ctx['symbol']}..."):
                 # Fetch stock data using yfinance
                 ticker = yf.Ticker(equity_ctx['symbol'])
                 hist_data = ticker.history(start=start_dt, end=end_dt)
+                
+                # Fetch technical indicators from database if requested
+                indicator_data = {}
+                if selected_indicator_codes:
+                    try:
+                        conn = st.session_state.db_manager.get_connection()
+                        with conn:
+                            with conn.cursor() as cur:
+                                for indicator_code in selected_indicator_codes:
+                                    # Query technical indicators from daily_equity_technicals table
+                                    cur.execute(f"""
+                                        SELECT trade_date, {indicator_code}
+                                        FROM daily_equity_technicals
+                                        WHERE symbol = %s
+                                          AND trade_date >= %s
+                                          AND trade_date <= %s
+                                          AND {indicator_code} IS NOT NULL
+                                        ORDER BY trade_date
+                                    """, (equity_ctx['symbol'], equity_ctx['start_date'], equity_ctx['end_date']))
+                                    
+                                    results = cur.fetchall()
+                                    if results:
+                                        dates = [r[0] for r in results]
+                                        values = [r[1] for r in results]
+                                        indicator_data[indicator_code] = {'dates': dates, 'values': values}
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not load technical indicators: {str(e)}")
                 
                 if hist_data.empty:
                     st.error(f"❌ No price data found for {equity_ctx['symbol']} in the specified period.")
@@ -3003,18 +3711,57 @@ elif st.session_state.current_page == 'equity_analysis':
                         name=equity_ctx['symbol']
                     ))
                     
-                    # Update layout
-                    fig.update_layout(
-                        title=f"{equity_ctx['company_name']} ({equity_ctx['symbol']}) - Price Chart<br><sub>Period: {equity_ctx['start_date']} to {equity_ctx['end_date']}</sub>",
-                        yaxis_title="Price (HKD)",
-                        xaxis_title="Date",
-                        height=600,
-                        showlegend=False,
-                        xaxis_rangeslider_visible=False
-                    )
+                    # Add technical indicators as overlays
+                    if indicator_data:
+                        colors = ['red', 'blue', 'green', 'purple', 'orange']  # Colors for indicators
+                        for i, (indicator_code, data) in enumerate(indicator_data.items()):
+                            if i < len(colors):
+                                # Get display name for indicator
+                                display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
+                                
+                                fig.add_trace(go.Scatter(
+                                    x=data['dates'],
+                                    y=data['values'],
+                                    mode='lines',
+                                    name=display_name,
+                                    line=dict(color=colors[i], width=2),
+                                    yaxis='y2'  # Use secondary y-axis for indicators
+                                ))
+                    
+                    # Update layout - enable legend when indicators are shown
+                    layout_config = {
+                        'title': f"{equity_ctx['company_name']} ({equity_ctx['symbol']}) - Price Chart<br><sub>Period: {equity_ctx['start_date']} to {equity_ctx['end_date']}</sub>",
+                        'yaxis': dict(title="Price (HKD)", side='left'),
+                        'xaxis_title': "Date",
+                        'height': 600,
+                        'showlegend': bool(indicator_data),  # Show legend when indicators are present
+                        'xaxis_rangeslider_visible': False
+                    }
+                    
+                    # Add secondary y-axis for technical indicators
+                    if indicator_data:
+                        layout_config['yaxis2'] = dict(
+                            title="Indicator Values",
+                            side='right',
+                            overlaying='y',
+                            showgrid=False
+                        )
+                    
+                    fig.update_layout(**layout_config)
                     
                     # Display the chart
                     st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Show indicator summary if any are selected
+                    if indicator_data and overlay_enabled:
+                        with st.expander("📊 Technical Indicators Summary", expanded=False):
+                            indicator_col1, indicator_col2, indicator_col3 = st.columns(3)
+                            for i, (indicator_code, data) in enumerate(indicator_data.items()):
+                                display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
+                                latest_value = data['values'][-1] if data['values'] else 'N/A'
+                                col = [indicator_col1, indicator_col2, indicator_col3][i % 3]
+                                with col:
+                                    st.metric(display_name, f"{latest_value:.2f}" if isinstance(latest_value, (int, float)) else str(latest_value))
                     
                     # Display key statistics
                     col1, col2, col3, col4 = st.columns(4)
@@ -3031,8 +3778,7 @@ elif st.session_state.current_page == 'equity_analysis':
                         volatility = hist_data['Close'].pct_change().std() * (252 ** 0.5) * 100  # Annualized volatility
                         st.metric("Volatility (Annual)", f"{volatility:.2f}%")
                     
-                    # Volume chart
-                    st.markdown("### 📊 Trading Volume")
+                    # Volume chart (no header text for compact display)
                     fig_volume = go.Figure()
                     fig_volume.add_trace(go.Bar(
                         x=hist_data.index,
@@ -3075,44 +3821,379 @@ elif st.session_state.current_page == 'equity_analysis':
             st.rerun()
 
 elif st.session_state.current_page == 'strategy_editor':
-    # Strategy Editor Dashboard
-    st.subheader("⚙️ Strategy Editor")
+    # Strategic Signal Management Dashboard
+    st.subheader("⚙️ Strategic Signal Management")
+    st.markdown("*Professional TXYZn signal management with evidence tracking and 21 technical indicators*")
     
-    # Placeholder content for Strategy Editor
-    st.info("🚧 **Coming Soon!** Strategy Editor Dashboard")
-    st.markdown("""
-    **Planned Features:**
-    - Interactive strategy parameter editing interface
-    - Strategy backtesting and simulation tools
-    - Risk parameter configuration and validation
-    - Strategy template library and management
-    - Performance impact preview and analysis
-    """)
+    # Initialize database connection for Strategic Signal System
+    try:
+        db_manager = DatabaseManager()
+        conn = db_manager.get_connection()
+    except Exception as e:
+        st.error(f"❌ Database connection failed: {str(e)}")
+        st.stop()
     
-    # Mock strategy editing interface
-    with st.expander("📋 Preview: Strategy Configuration", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.selectbox("Strategy Template:", ["HK Growth", "Dividend Focus", "Value Investing", "Momentum", "Custom"], disabled=True)
-            st.slider("Risk Tolerance:", 1, 10, 5, disabled=True)
-            st.number_input("Max Position Size (%):", 1, 25, 10, disabled=True)
+    # Tab navigation for different management areas
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Strategy Overview", 
+        "🎯 Signal Events", 
+        "📈 Indicators", 
+        "✅ System Status"
+    ])
+    
+    with tab1:
+        # Strategy Management Interface
+        st.markdown("### Strategy Management")
+        st.markdown("*Manage 108 TXYZn strategic signal combinations*")
         
-        with col2:
-            st.selectbox("Rebalancing Frequency:", ["Daily", "Weekly", "Monthly", "Quarterly"], index=2, disabled=True)
-            st.checkbox("Enable Stop Loss", disabled=True)
-            st.checkbox("Enable Take Profit", disabled=True)
+        # Strategy Statistics
+        try:
+            cur = conn.cursor()
+            
+            # Get strategy statistics
+            cur.execute("""
+            SELECT 
+                COUNT(*) as total_strategies,
+                COUNT(DISTINCT base_strategy) as base_strategies,
+                COUNT(DISTINCT category) as categories,
+                COUNT(CASE WHEN side = 'B' THEN 1 END) as buy_strategies,
+                COUNT(CASE WHEN side = 'S' THEN 1 END) as sell_strategies
+            FROM strategy
+            """)
+            stats = cur.fetchone()
+            
+            if stats:
+                col1, col2, col3, col4, col5 = st.columns(5)
+                with col1:
+                    st.metric("Total Strategies", stats[0])
+                with col2:
+                    st.metric("Base Strategies", stats[1])
+                with col3:
+                    st.metric("Categories", stats[2])
+                with col4:
+                    st.metric("Buy Strategies", stats[3])
+                with col5:
+                    st.metric("Sell Strategies", stats[4])
+            
+            # Strategy Filters
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                category_filter = st.selectbox(
+                    "Category Filter:",
+                    ["All", "breakout", "mean-reversion", "trend", "divergence", "level"]
+                )
+            with col2:
+                side_filter = st.selectbox("Side Filter:", ["All", "B", "S"])
+            with col3:
+                strength_filter = st.selectbox("Strength Filter:", ["All"] + list(range(1, 10)))
+            
+            # Build query with filters
+            query = "SELECT strategy_key, base_strategy, side, strength, name, description, category FROM strategy WHERE 1=1"
+            params = []
+            
+            if category_filter != "All":
+                query += " AND category = %s"
+                params.append(category_filter)
+            if side_filter != "All":
+                query += " AND side = %s"
+                params.append(side_filter)
+            if strength_filter != "All":
+                query += " AND strength = %s"
+                params.append(strength_filter)
+            
+            query += " ORDER BY category, base_strategy, strength"
+            
+            cur.execute(query, params)
+            strategies = cur.fetchall()
+            
+            # Display strategies
+            st.markdown("### Strategy Catalog")
+            if strategies:
+                for strategy in strategies:
+                    strategy_key, base_strategy, side, strength, name, description, category = strategy
+                    
+                    with st.expander(f"**{strategy_key}** - {name}"):
+                        col1, col2, col3 = st.columns([2, 1, 1])
+                        with col1:
+                            st.markdown(f"**Description:** {description}")
+                            st.markdown(f"**Category:** {category}")
+                        with col2:
+                            st.markdown(f"**Side:** {'Buy' if side == 'B' else 'Sell'}")
+                            st.markdown(f"**Base:** {base_strategy}")
+                        with col3:
+                            st.markdown(f"**Strength:** {strength}/9")
+                            strength_color = "🟢" if strength >= 7 else "🟡" if strength >= 4 else "🔴"
+                            st.markdown(f"**Level:** {strength_color}")
+            else:
+                st.info("No strategies found matching the selected filters.")
+        
+        except Exception as e:
+            st.error(f"Error loading strategies: {str(e)}")
+    
+    with tab2:
+        # Signal Events Monitoring
+        st.markdown("### Signal Events Monitoring")
+        st.markdown("*Real-time monitoring of TXYZn signal events with evidence*")
+        
+        try:
+            cur = conn.cursor()
+            
+            # Get signal event statistics
+            cur.execute("""
+            SELECT 
+                COUNT(*) as total_signals,
+                COUNT(DISTINCT symbol) as symbols_with_signals,
+                COUNT(DISTINCT signal) as unique_strategies_used,
+                AVG(confidence) as avg_confidence,
+                MAX(timestamp) as latest_signal
+            FROM signal_event
+            """)
+            signal_stats = cur.fetchone()
+            
+            if signal_stats and signal_stats[0] > 0:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Signals", signal_stats[0])
+                with col2:
+                    st.metric("Symbols", signal_stats[1])
+                with col3:
+                    st.metric("Strategies Used", signal_stats[2])
+                with col4:
+                    st.metric("Avg Confidence", f"{signal_stats[3]:.1%}" if signal_stats[3] else "N/A")
+                
+                # Recent signals
+                st.markdown("### Recent Signal Events")
+                cur.execute("""
+                SELECT 
+                    se.symbol,
+                    se.signal,
+                    s.name as strategy_name,
+                    se.confidence,
+                    se.strength,
+                    se.timestamp,
+                    se.evidence
+                FROM signal_event se
+                JOIN strategy s ON se.signal = s.strategy_key
+                ORDER BY se.timestamp DESC
+                LIMIT 10
+                """)
+                recent_signals = cur.fetchall()
+                
+                for signal in recent_signals:
+                    symbol, signal_code, strategy_name, confidence, strength, timestamp, evidence = signal
+                    
+                    with st.expander(f"**{symbol}** - {signal_code} ({confidence:.1%} confidence)"):
+                        col1, col2 = st.columns([2, 1])
+                        with col1:
+                            st.markdown(f"**Strategy:** {strategy_name}")
+                            st.markdown(f"**Timestamp:** {timestamp}")
+                            if evidence:
+                                reasons = evidence.get('reasons', [])
+                                if reasons:
+                                    st.markdown("**Reasons:**")
+                                    for reason in reasons:
+                                        st.markdown(f"• {reason}")
+                        with col2:
+                            st.markdown(f"**Strength:** {strength}/9")
+                            st.markdown(f"**Confidence:** {confidence:.1%}")
+                            if evidence and 'score' in evidence:
+                                st.markdown(f"**Score:** {evidence['score']}")
+            else:
+                st.info("No signal events found. Generate some signals to see monitoring data here.")
+                st.markdown("**To generate signals:**")
+                st.markdown("1. Ensure technical indicator data exists")
+                st.markdown("2. Run the Strategic Signal engine")
+                st.markdown("3. Signals will appear here automatically")
+        
+        except Exception as e:
+            st.error(f"Error loading signal events: {str(e)}")
+    
+    with tab3:
+        # Indicators Configuration
+        st.markdown("### Technical Indicators Management")
+        st.markdown("*Configure and monitor 21 technical indicators for strategic signals*")
+        
+        try:
+            cur = conn.cursor()
+            
+            # Get indicator statistics
+            cur.execute("""
+            SELECT 
+                COUNT(DISTINCT indicator_name) as indicator_types,
+                COUNT(*) as total_snapshots,
+                COUNT(DISTINCT symbol) as symbols_covered,
+                MAX(timestamp) as latest_update
+            FROM indicator_snapshot
+            """)
+            indicator_stats = cur.fetchone()
+            
+            if indicator_stats and indicator_stats[0] > 0:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Indicator Types", indicator_stats[0])
+                with col2:
+                    st.metric("Total Snapshots", indicator_stats[1])
+                with col3:
+                    st.metric("Symbols Covered", indicator_stats[2])
+                with col4:
+                    st.metric("Latest Update", str(indicator_stats[3])[:16] if indicator_stats[3] else "N/A")
+                
+                # Available indicators
+                cur.execute("""
+                SELECT 
+                    indicator_name,
+                    COUNT(*) as snapshot_count,
+                    COUNT(DISTINCT symbol) as symbol_count,
+                    MAX(timestamp) as last_update
+                FROM indicator_snapshot
+                GROUP BY indicator_name
+                ORDER BY indicator_name
+                """)
+                indicators = cur.fetchall()
+                
+                st.markdown("### Available Indicators")
+                for indicator in indicators:
+                    ind_name, snapshot_count, symbol_count, last_update = indicator
+                    
+                    with st.expander(f"**{ind_name.upper()}** ({symbol_count} symbols, {snapshot_count} snapshots)"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown(f"**Snapshots:** {snapshot_count}")
+                            st.markdown(f"**Symbols:** {symbol_count}")
+                        with col2:
+                            st.markdown(f"**Last Update:** {str(last_update)[:16] if last_update else 'N/A'}")
+                            
+                        # Show recent values for this indicator
+                        cur.execute("""
+                        SELECT symbol, value, timestamp
+                        FROM indicator_snapshot
+                        WHERE indicator_name = %s
+                        ORDER BY timestamp DESC
+                        LIMIT 5
+                        """, (ind_name,))
+                        recent_values = cur.fetchall()
+                        
+                        if recent_values:
+                            st.markdown("**Recent Values:**")
+                            for symbol, value, timestamp in recent_values:
+                                st.markdown(f"• {symbol}: {value:.2f} at {str(timestamp)[:16]}")
+            else:
+                st.info("No indicator data found. Technical indicators need to be populated.")
+                st.markdown("**To populate indicators:**")
+                st.markdown("1. Run the data integration bridge")
+                st.markdown("2. Connect daily_equity_technicals to indicator_snapshot")
+                st.markdown("3. Indicators will be available for strategic signals")
+        
+        except Exception as e:
+            st.error(f"Error loading indicators: {str(e)}")
+    
+    with tab4:
+        # System Status and Validation
+        st.markdown("### System Status & Validation")
+        st.markdown("*Monitor Strategic Signal System health and data integrity*")
+        
+        try:
+            cur = conn.cursor()
+            
+            # System health checks
+            st.markdown("### Database Health Check")
+            
+            # Check table existence and record counts
+            tables = [
+                ('strategy', 'Strategic Signal Definitions'),
+                ('parameter_set', 'Parameter Configurations'),
+                ('signal_run', 'Signal Run Executions'),
+                ('signal_event', 'Signal Event Records'),
+                ('indicator_snapshot', 'Technical Indicator Data')
+            ]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Table Status:**")
+                for table, description in tables:
+                    cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    count = cur.fetchone()[0]
+                    status = "✅" if count > 0 else "⚠️"
+                    st.markdown(f"{status} **{table}**: {count} records")
+            
+            with col2:
+                st.markdown("**Signal Format Validation:**")
+                # Test TXYZn format validation
+                test_signals = ["BBRK5", "SOBR7", "INVALID", "BMAC3"]
+                for test_signal in test_signals:
+                    import re
+                    is_valid = bool(re.match(r'^[BS][A-Z]{3}[1-9]$', test_signal))
+                    status = "✅" if is_valid else "❌"
+                    st.markdown(f"{status} **{test_signal}**: {'Valid' if is_valid else 'Invalid'}")
+            
+            # Data integrity checks
+            st.markdown("### Data Integrity Checks")
+            
+            # Check for orphaned records
+            cur.execute("""
+            SELECT 
+                COUNT(CASE WHEN s.strategy_key IS NULL THEN 1 END) as orphaned_signals,
+                COUNT(*) as total_signals
+            FROM signal_event se
+            LEFT JOIN strategy s ON se.signal = s.strategy_key
+            """)
+            integrity = cur.fetchone()
+            
+            if integrity:
+                orphaned, total = integrity
+                if orphaned == 0:
+                    st.success(f"✅ Data integrity: All {total} signal events have valid strategy references")
+                else:
+                    st.warning(f"⚠️ Found {orphaned} orphaned signal events out of {total} total")
+            
+            # Latest activity summary
+            st.markdown("### Recent Activity")
+            cur.execute("""
+            SELECT 
+                'Signal Events' as type,
+                COUNT(*) as count,
+                MAX(timestamp) as latest
+            FROM signal_event
+            WHERE timestamp >= CURRENT_DATE - INTERVAL '7 days'
+            UNION ALL
+            SELECT 
+                'Indicator Updates' as type,
+                COUNT(*) as count,
+                MAX(timestamp) as latest
+            FROM indicator_snapshot
+            WHERE timestamp >= CURRENT_DATE - INTERVAL '7 days'
+            """)
+            activity = cur.fetchall()
+            
+            for activity_type, count, latest in activity:
+                st.markdown(f"**{activity_type}**: {count} in last 7 days (Latest: {str(latest)[:16] if latest else 'N/A'})")
+        
+        except Exception as e:
+            st.error(f"Error checking system status: {str(e)}")
+    
+    # Clean up database connection
+    try:
+        conn.close()
+    except:
+        pass
     
     # Navigation
-    col1, col2 = st.columns([1, 1])
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("🔙 Back to Strategy Section", type="secondary"):
             st.session_state.current_page = 'equity_analysis'
+            st.session_state.navigation['section'] = 'strategy'
+            st.session_state.navigation['page'] = 'equity_analysis'
             st.rerun()
     with col2:
         if st.button("📊 View Portfolios", type="primary"):
             st.session_state.current_page = 'overview'
             st.session_state.navigation['section'] = 'portfolios'
             st.session_state.navigation['page'] = 'overview'
+            st.rerun()
+    with col3:
+        if st.button("🔄 Refresh Data", type="secondary"):
             st.rerun()
 
 elif st.session_state.current_page == 'strategy_comparison':
