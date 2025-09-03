@@ -32,6 +32,87 @@ except ImportError:
     from analysis_manager import AnalysisManager
     from hkex_calendar import validate_hkex_analysis_period, hkex_calendar
 
+@st.dialog("Select Technical Indicators")
+def select_indicators_dialog():
+    """Modal dialog for selecting technical indicators"""
+    st.markdown("**Select up to 3 technical indicators to overlay on the price chart:**")
+    st.markdown("---")
+    
+    # Available technical indicators
+    available_indicators = [
+        ("RSI (7)", "rsi_7"),
+        ("RSI (14)", "rsi_14"), 
+        ("RSI (21)", "rsi_21"),
+        ("MACD", "macd"),
+        ("MACD Signal", "macd_signal"),
+        ("SMA (20)", "sma_20"),
+        ("EMA (12)", "ema_12"),
+        ("EMA (26)", "ema_26"),
+        ("EMA (50)", "ema_50"),
+        ("EMA (100)", "ema_100"),
+        ("Bollinger Upper", "bollinger_upper"),
+        ("Bollinger Lower", "bollinger_lower"),
+        ("Volume SMA (20)", "volume_sma_20")
+    ]
+    
+    # Initialize selection state if not exists
+    if 'selected_indicators_modal' not in st.session_state:
+        st.session_state.selected_indicators_modal = []
+    
+    # Create checkboxes in a grid layout
+    cols = st.columns(3)
+    selected_count = 0
+    
+    for i, (name, code) in enumerate(available_indicators):
+        col_idx = i % 3
+        with cols[col_idx]:
+            # Check if this indicator is currently selected
+            is_selected = code in st.session_state.selected_indicators_modal
+            
+            # Disable checkbox if 3 are already selected and this one isn't selected
+            max_reached = len(st.session_state.selected_indicators_modal) >= 3 and not is_selected
+            
+            checkbox_result = st.checkbox(
+                name, 
+                value=is_selected, 
+                disabled=max_reached,
+                key=f"modal_indicator_{code}"
+            )
+            
+            # Update selection state
+            if checkbox_result and code not in st.session_state.selected_indicators_modal:
+                if len(st.session_state.selected_indicators_modal) < 3:
+                    st.session_state.selected_indicators_modal.append(code)
+            elif not checkbox_result and code in st.session_state.selected_indicators_modal:
+                st.session_state.selected_indicators_modal.remove(code)
+    
+    selected_count = len(st.session_state.selected_indicators_modal)
+    
+    # Show selection status
+    st.markdown("---")
+    if selected_count == 0:
+        st.info("📊 Select 1-3 indicators to display")
+    elif selected_count >= 3:
+        st.success(f"✅ Maximum selected: {selected_count}/3")
+    else:
+        st.info(f"📊 Selected: {selected_count}/3")
+    
+    # Action buttons
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📊 Show Indicators", disabled=selected_count == 0, type="primary", use_container_width=True):
+            # Store final selection and close modal
+            st.session_state.confirmed_indicators = st.session_state.selected_indicators_modal.copy()
+            st.session_state.show_indicators_clicked = True
+            st.rerun()
+    
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            # Reset modal selection and close
+            st.session_state.selected_indicators_modal = []
+            st.rerun()
+
 @st.dialog("Copy Portfolio")
 def copy_portfolio_dialog(portfolio_id: str):
     """Modal dialog for copying a portfolio with proper UI"""
@@ -1248,6 +1329,43 @@ def calculate_rsi(prices, window=14):
             pass
         return None
 
+def calculate_rsi_realtime(prices, period=14):
+    """Calculate RSI with configurable period for real-time use"""
+    try:
+        delta = prices.diff()
+        gain = delta.clip(lower=0)  # Positive price changes
+        loss = -delta.clip(upper=0)  # Negative price changes (made positive)
+        avg_gain = gain.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs))
+        return rsi.fillna(50)
+    except Exception as e:
+        return pd.Series([50] * len(prices), index=prices.index)
+
+def calculate_macd_realtime(prices, fast=12, slow=26, signal=9):
+    """Calculate MACD with configurable parameters for real-time use"""
+    try:
+        ema_fast = prices.ewm(span=fast, adjust=False, min_periods=fast).mean()
+        ema_slow = prices.ewm(span=slow, adjust=False, min_periods=slow).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False, min_periods=signal).mean()
+        histogram = macd_line - signal_line
+        return macd_line, signal_line, histogram
+    except Exception as e:
+        # Return zeros if calculation fails
+        zeros = pd.Series([0] * len(prices), index=prices.index)
+        return zeros, zeros, zeros
+
+def calculate_ema_realtime(prices, period):
+    """Calculate EMA with configurable period for real-time use"""
+    try:
+        ema = prices.ewm(span=period, adjust=False, min_periods=period).mean()
+        return ema
+    except Exception as e:
+        # Return original prices if calculation fails
+        return prices
+
 @st.cache_data
 def get_analysis_period_for_equity(analysis_id: int):
     """Get the analysis period (start_date, end_date) for a specific analysis"""
@@ -2093,7 +2211,7 @@ for section_key, section_data in navigation_structure.items():
                     st.rerun()
             else:
                 # Future/unavailable pages
-                st.markdown(f"<div style='padding: 8px; color: #8e8ea0; font-size: 14px;'>{page_label} <em>(Coming Soon)</em></div>", 
+                st.markdown(f"<div style='padding: 8px; color: #8e8ea0; font-size: 11px;'>{page_label} <em>(Coming Soon)</em></div>", 
                            unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
@@ -3419,8 +3537,46 @@ elif st.session_state.current_page == 'pv_analysis':
             else:
                 st.warning("No data available for selected analyses")
 elif st.session_state.current_page == 'equity_analysis':
-    # Equity Strategy Analysis Dashboard
-    st.subheader("📈 Equity Strategy Analysis")
+    # Equity Strategy Analysis Dashboard - with compact styling
+    st.markdown("""
+    <style>
+    /* Compact styling for Equity Strategy Analysis */
+    .stSelectbox label {
+        font-size: 12px !important;
+        font-weight: normal !important;
+    }
+    .stSelectbox div[data-testid="stSelectbox"] > div {
+        font-size: 12px !important;
+    }
+    .stDateInput label {
+        font-size: 12px !important;
+        font-weight: normal !important;
+    }
+    .stMultiSelect label {
+        font-size: 12px !important;
+        font-weight: normal !important;
+    }
+    .stCheckbox label {
+        font-size: 12px !important;
+    }
+    /* Metric elements - 14px bold font size */
+    .stMetric label {
+        font-size: 14px !important;
+        font-weight: bold !important;
+    }
+    .stMetric div {
+        font-size: 14px !important;
+        font-weight: bold !important;
+    }
+    /* Reduce metric spacing */
+    .metric-container {
+        padding: 5px !important;
+    }
+    </style>
+    <div style='margin-bottom: 15px;'>
+        <h3 style='font-size: 18px; margin: 0; color: #1f77b4;'>📈 Equity Strategy Analysis</h3>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Debug toggle for troubleshooting
     debug_col1, debug_col2 = st.columns([4, 1])
@@ -3494,77 +3650,192 @@ elif st.session_state.current_page == 'equity_analysis':
     
     st.markdown("---")
     
-    # Selection interface - simplified to Portfolio → Equity only
-    select_col1, select_col2, go_col = st.columns([3, 4, 1])
+    # Selection Method Choice
+    st.markdown("#### 📊 Analysis Method")
+    selection_method = st.radio(
+        "Choose how to select equity for analysis:",
+        ["Portfolio-based Selection", "Direct Symbol Entry"],
+        index=0,
+        horizontal=True,
+        help="Portfolio-based: Select from existing portfolio holdings. Direct: Select from all known securities."
+    )
     
-    with select_col1:
-        portfolio_options = [f"{p['portfolio_id']} ({p['name']})" for p in portfolios]
-        selected_portfolio_display = st.selectbox(
-            "📁 Portfolio",
-            options=portfolio_options,
-            index=0 if portfolio_options else None,
-            key="portfolio_selector"
-        )
+    # Initialize variables to prevent NameError
+    go_clicked = False
+    can_proceed = False
+    
+    if selection_method == "Direct Symbol Entry":
+        # Direct symbol selection from all available securities
+        st.markdown("**Direct Symbol Analysis** - Select from all known securities in portfolios")
         
-        if selected_portfolio_display:
-            selected_portfolio_id = selected_portfolio_display.split(' ')[0]
+        # Get all unique securities from all portfolios (active and inactive)
+        all_securities = get_equities_from_portfolio('all_overview')
+        
+        if all_securities:
+            direct_col1, direct_go = st.columns([5, 1])
             
-            # Clear equity selection if portfolio changes
-            if st.session_state.equity_portfolio_id != selected_portfolio_id:
-                st.session_state.equity_symbol = None  # Reset equity selection
-                
-            st.session_state.equity_portfolio_id = selected_portfolio_id
-    
-    with select_col2:
-        if st.session_state.equity_portfolio_id:
-            equities = get_equities_from_portfolio(st.session_state.equity_portfolio_id)
-            
-            if equities:
-                equity_options = [f"{e['symbol']} - {e['company_name']}" for e in equities]
-                
-                # Show count of available equities
-                portfolio_name = next(p['name'] for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
+            with direct_col1:
+                # Create dropdown options in "SYMBOL - Company Name" format
+                security_options = []
+                for security in all_securities:
+                    company_name = security['company_name']
+                    if len(company_name) > 30:
+                        company_name = company_name[:27] + "..."
+                    security_options.append(f"{security['symbol']} - {company_name}")
                 
                 # Find current selection index if symbol is pre-selected
                 current_index = 0
-                if st.session_state.equity_symbol:
-                    for i, option in enumerate(equity_options):
-                        if option.startswith(st.session_state.equity_symbol):
+                if st.session_state.get('direct_selected_security'):
+                    for i, option in enumerate(security_options):
+                        if option.startswith(st.session_state.direct_selected_security):
                             current_index = i
                             break
                 
-                selected_equity_display = st.selectbox(
-                    f"📈 Equity ({len(equity_options)} available)",
-                    options=equity_options,
+                selected_security_display = st.selectbox(
+                    f"📈 Select Security ({len(security_options)} available)",
+                    options=security_options,
                     index=current_index,
-                    key="equity_selector",
-                    help=f"All equities from {portfolio_name} (including both active and inactive positions)"
+                    key="direct_security_selector",
+                    help="Select any security from all your portfolios (active and inactive positions)"
                 )
                 
-                if selected_equity_display:
-                    selected_symbol = selected_equity_display.split(' - ')[0]
-                    st.session_state.equity_symbol = selected_symbol
-            else:
-                # No equities found
-                portfolio_name = next(p['name'] for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
-                st.selectbox(
-                    "📈 Equity", 
-                    options=[], 
-                    disabled=True,
-                    help=f"No equities found in {portfolio_name}"
-                )
-                st.warning(f"⚠️ No equities found in portfolio '{portfolio_name}'. Please select a different portfolio.")
+                if selected_security_display:
+                    selected_symbol = selected_security_display.split(' - ')[0]
+                    st.session_state.direct_selected_security = selected_symbol
+                    # Find the corresponding security info
+                    selected_security_info = next(s for s in all_securities if s['symbol'] == selected_symbol)
+                    st.session_state.direct_security_info = selected_security_info
+            
+            with direct_go:
+                st.markdown("<br>", unsafe_allow_html=True)
+                can_proceed = bool(st.session_state.get('direct_selected_security'))
+                go_clicked = st.button("🚀 Analyze", type="primary", disabled=not can_proceed)
         else:
-            st.selectbox("📈 Equity", options=[], disabled=True, help="Select a portfolio first")
+            st.warning("⚠️ No securities found in any portfolios. Please create portfolios with positions first.")
+            can_proceed = False
+            go_clicked = False
+        
+        if go_clicked and can_proceed:
+            # Set up direct analysis context
+            st.session_state.equity_portfolio_id = "direct_analysis"
+            st.session_state.equity_symbol = st.session_state.direct_selected_security
+            
+            # Fetch data directly
+            start_date_str = st.session_state.equity_start_date.strftime('%Y-%m-%d')
+            end_date_str = st.session_state.equity_end_date.strftime('%Y-%m-%d')
+            
+            data_fetched = fetch_and_store_yahoo_data(
+                st.session_state.direct_selected_security,
+                start_date_str,
+                end_date_str
+            )
+            
+            if data_fetched:
+                # Create simplified context for direct analysis using selected security info
+                selected_info = st.session_state.direct_security_info
+                equity_ctx = {
+                    'portfolio_id': "direct_analysis",
+                    'portfolio_name': "Direct Analysis",
+                    'portfolio_analysis_name': "Custom Date Range",
+                    'symbol': selected_info['symbol'],
+                    'company_name': selected_info['company_name'],
+                    'start_date': start_date_str,
+                    'end_date': end_date_str
+                }
+                
+                st.session_state.equity_context = equity_ctx
+                st.session_state.chart_data_ready = True
+                st.success(f"✅ Successfully loaded data for {selected_info['symbol']} - {selected_info['company_name']}")
+            else:
+                st.error("❌ Failed to fetch data. Please try a different security.")
     
-    with go_col:
-        st.markdown("<br>", unsafe_allow_html=True)  # Align button with selectboxes
-        # Enable "Go" button if portfolio and equity are selected
-        can_proceed = bool(st.session_state.equity_portfolio_id and st.session_state.equity_symbol)
-        go_clicked = st.button("🚀 Go", type="primary", disabled=not can_proceed)
+    else:
+        # Original portfolio-based selection
+        st.markdown("**Portfolio-based Selection** - Choose from existing portfolio holdings")
+        # Selection interface - optimized layout for better text display
+        select_col1, select_col2, go_col = st.columns([4, 5, 1])
+        
+        with select_col1:
+            # Truncate long portfolio names for better display
+            portfolio_options = []
+            for p in portfolios:
+                name = p['name']
+                if len(name) > 20:
+                    name = name[:17] + "..."
+                portfolio_options.append(f"{p['portfolio_id']} ({name})")
+            
+            selected_portfolio_display = st.selectbox(
+                "📁 Portfolio",
+                options=portfolio_options,
+                index=0 if portfolio_options else None,
+                key="portfolio_selector"
+            )
+            
+            if selected_portfolio_display:
+                selected_portfolio_id = selected_portfolio_display.split(' ')[0]
+                
+                # Clear equity selection if portfolio changes
+                if st.session_state.equity_portfolio_id != selected_portfolio_id:
+                    st.session_state.equity_symbol = None  # Reset equity selection
+                    
+                st.session_state.equity_portfolio_id = selected_portfolio_id
     
-    # Process analysis when Go is clicked
-    if go_clicked and can_proceed:
+        with select_col2:
+            if st.session_state.equity_portfolio_id:
+                equities = get_equities_from_portfolio(st.session_state.equity_portfolio_id)
+                
+                if equities:
+                    # Truncate long company names for better display
+                    equity_options = []
+                    for e in equities:
+                        company_name = e['company_name']
+                        if len(company_name) > 25:
+                            company_name = company_name[:22] + "..."
+                        equity_options.append(f"{e['symbol']} - {company_name}")
+                
+                    # Show count of available equities
+                    portfolio_name = next(p['name'] for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
+                    
+                    # Find current selection index if symbol is pre-selected
+                    current_index = 0
+                    if st.session_state.equity_symbol:
+                        for i, option in enumerate(equity_options):
+                            if option.startswith(st.session_state.equity_symbol):
+                                current_index = i
+                                break
+                    
+                    selected_equity_display = st.selectbox(
+                        f"📈 Equity ({len(equity_options)} available)",
+                        options=equity_options,
+                        index=current_index,
+                        key="equity_selector",
+                        help=f"All equities from {portfolio_name} (including both active and inactive positions)"
+                    )
+                    
+                    if selected_equity_display:
+                        selected_symbol = selected_equity_display.split(' - ')[0]
+                        st.session_state.equity_symbol = selected_symbol
+                else:
+                    # No equities found
+                    portfolio_name = next(p['name'] for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
+                    st.selectbox(
+                        "📈 Equity", 
+                        options=[], 
+                        disabled=True,
+                        help=f"No equities found in {portfolio_name}"
+                    )
+                    st.warning(f"⚠️ No equities found in portfolio '{portfolio_name}'. Please select a different portfolio.")
+            else:
+                st.selectbox("📈 Equity", options=[], disabled=True, help="Select a portfolio first")
+    
+        with go_col:
+            st.markdown("<br>", unsafe_allow_html=True)  # Align button with selectboxes
+            # Enable "Go" button if portfolio and equity are selected
+            can_proceed = bool(st.session_state.equity_portfolio_id and st.session_state.equity_symbol)
+            go_clicked = st.button("🚀 Go", type="primary", disabled=not can_proceed)
+    
+    # Process analysis when Go is clicked or update existing analysis (portfolio-based only)
+    if go_clicked and can_proceed and st.session_state.equity_portfolio_id != "direct_analysis":
         # Get selected portfolio and equity info
         selected_portfolio = next(p for p in portfolios if p['portfolio_id'] == st.session_state.equity_portfolio_id)
         selected_equity = next(e for e in get_equities_from_portfolio(st.session_state.equity_portfolio_id) 
@@ -3595,9 +3866,14 @@ elif st.session_state.current_page == 'equity_analysis':
             
             # Store in session state
             st.session_state.equity_context = equity_ctx
+            st.session_state.chart_data_ready = True
         else:
             st.error("❌ Failed to fetch data. Please try again or select a different date range.")
             st.stop()
+    
+    # Display chart if data is ready (persists across modal interactions)
+    if st.session_state.get('chart_data_ready', False) and 'equity_context' in st.session_state:
+        equity_ctx = st.session_state.equity_context
         
         # Display context information in compact single row
         st.markdown("---")
@@ -3621,40 +3897,90 @@ elif st.session_state.current_page == 'equity_analysis':
         # Maximum number of indicators (configurable, not hardcoded)
         MAX_INDICATORS = 3
         
-        # Available technical indicators from database
-        available_indicators = [
-            ("RSI (14)", "rsi_14"),
-            ("MACD", "macd"),
-            ("MACD Signal", "macd_signal"),
-            ("SMA (20)", "sma_20"),
-            ("EMA (12)", "ema_12"),
-            ("EMA (26)", "ema_26"),
-            ("Bollinger Upper", "bollinger_upper"),
-            ("Bollinger Lower", "bollinger_lower"),
-            ("Volume SMA (20)", "volume_sma_20")
-        ]
+        # Initialize session state for indicators
+        if 'confirmed_indicators' not in st.session_state:
+            st.session_state.confirmed_indicators = []
+        if 'show_indicators_clicked' not in st.session_state:
+            st.session_state.show_indicators_clicked = False
         
-        # Multi-select for indicators with configurable limit
+        # Single button to open indicator selection modal
         indicator_col1, indicator_col2 = st.columns([3, 1])
         with indicator_col1:
-            selected_indicators = st.multiselect(
-                f"Select up to {MAX_INDICATORS} technical indicators to overlay on the price chart:",
-                options=[f"{name} ({code})" for name, code in available_indicators],
-                default=[],
-                max_selections=MAX_INDICATORS,
-                key="indicator_selector"
-            )
+            # Show currently selected indicators or prompt
+            if st.session_state.confirmed_indicators:
+                # Show selected indicators
+                available_indicators = [
+                    ("RSI (7)", "rsi_7"), ("RSI (14)", "rsi_14"), ("RSI (21)", "rsi_21"),
+                    ("MACD", "macd"), ("MACD Signal", "macd_signal"), ("SMA (20)", "sma_20"),
+                    ("EMA (12)", "ema_12"), ("EMA (26)", "ema_26"), ("EMA (50)", "ema_50"),
+                    ("EMA (100)", "ema_100"), ("Bollinger Upper", "bollinger_upper"),
+                    ("Bollinger Lower", "bollinger_lower"), ("Volume SMA (20)", "volume_sma_20")
+                ]
+                selected_names = []
+                for code in st.session_state.confirmed_indicators:
+                    name = next((name for name, c in available_indicators if c == code), code)
+                    selected_names.append(name)
+                st.markdown(f"**Selected Indicators:** {', '.join(selected_names)}")
+            else:
+                st.markdown("**No technical indicators selected**")
         
         with indicator_col2:
-            overlay_enabled = st.checkbox("Enable Indicators", value=True, disabled=not selected_indicators)
+            st.markdown("<br>", unsafe_allow_html=True)  # Align button
+            if st.button("📊 Select Indicators", type="primary"):
+                select_indicators_dialog()
         
-        # Parse selected indicator codes
-        selected_indicator_codes = []
-        if selected_indicators and overlay_enabled:
-            for selection in selected_indicators:
-                # Extract code from "Name (code)" format
-                code = selection.split('(')[-1].replace(')', '')
-                selected_indicator_codes.append(code)
+        
+        # Use confirmed indicators from modal
+        selected_indicator_codes = st.session_state.confirmed_indicators if st.session_state.show_indicators_clicked else []
+        
+        # Set default values for indicator calculation
+        use_realtime = True
+        rsi_period = 14
+        macd_fast = 12
+        
+        # Technical Indicator Configuration Panel
+        if st.session_state.confirmed_indicators:
+            with st.expander("⚙️ Indicator Configuration & Calculation Methods", expanded=False):
+                st.markdown("#### How Technical Indicators are Calculated:")
+                
+                # Show calculation methods for selected indicators
+                for indicator_code in st.session_state.confirmed_indicators:
+                    if indicator_code in ['rsi_7', 'rsi_14', 'rsi_21']:
+                        st.markdown("""
+                        **RSI (Relative Strength Index):**
+                        - Period: Variable (7, 14, or 21 days based on selection)
+                        - Formula: RSI = 100 - (100 / (1 + RS))
+                        - RS = Average Gain / Average Loss over N periods
+                        - Uses exponential moving average for smoothing
+                        - Values: 0-100 (>70 overbought, <30 oversold)
+                        """)
+                    elif indicator_code in ['macd', 'macd_signal']:
+                        st.markdown("""
+                        **MACD (Moving Average Convergence Divergence):**
+                        - Fast EMA: 12 periods, Slow EMA: 26 periods, Signal: 9 periods
+                        - MACD Line = EMA(12) - EMA(26)
+                        - Signal Line = EMA(9) of MACD Line
+                        - Histogram = MACD Line - Signal Line
+                        - Buy signal when MACD crosses above Signal Line
+                        """)
+                    elif code in ['ema_12', 'ema_26', 'ema_50', 'ema_100']:
+                        period = code.split('_')[1]
+                        st.markdown(f"""
+                        **EMA ({period}) - Exponential Moving Average:**
+                        - Period: {period} days
+                        - More responsive to recent price changes than SMA
+                        - Used for trend identification and support/resistance
+                        """)
+                
+                # Configuration options
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    use_realtime = st.checkbox("Use Real-time Calculation", value=True, 
+                                             help="Calculate indicators from price data instead of database")
+                with col2:
+                    rsi_period = st.slider("RSI Period", min_value=7, max_value=21, value=14)
+                with col3:
+                    macd_fast = st.slider("MACD Fast", min_value=8, max_value=16, value=12)
         
         # Candlestick Chart Section
         st.markdown(f"### 📊 {equity_ctx['symbol']} Price Chart")
@@ -3666,67 +3992,116 @@ elif st.session_state.current_page == 'equity_analysis':
             start_dt = datetime.strptime(equity_ctx['start_date'], '%Y-%m-%d')
             end_dt = datetime.strptime(equity_ctx['end_date'], '%Y-%m-%d')
             
-            with st.spinner(f"Loading price data and technical indicators for {equity_ctx['symbol']}..."):
+            with st.spinner(f"Loading price data for {equity_ctx['symbol']}..."):
                 # Fetch stock data using yfinance
                 ticker = yf.Ticker(equity_ctx['symbol'])
                 hist_data = ticker.history(start=start_dt, end=end_dt)
+            
+            # Always display basic price chart first
+            if hist_data.empty:
+                st.error(f"❌ No price data found for {equity_ctx['symbol']} in the specified period.")
+            else:
+                # Create basic candlestick chart
+                fig = go.Figure(data=go.Candlestick(
+                    x=hist_data.index,
+                    open=hist_data['Open'],
+                    high=hist_data['High'],
+                    low=hist_data['Low'],
+                    close=hist_data['Close'],
+                    name=equity_ctx['symbol']
+                ))
                 
-                # Fetch technical indicators from database if requested
+                # Process and add technical indicators ONLY when button is clicked
                 indicator_data = {}
-                if selected_indicator_codes:
-                    try:
-                        conn = st.session_state.db_manager.get_connection()
-                        with conn:
-                            with conn.cursor() as cur:
+                if st.session_state.show_indicators_clicked and st.session_state.confirmed_indicators:
+                    with st.spinner(f"Calculating technical indicators..."):
+                        if use_realtime:
+                            # Real-time calculation from price data
+                            try:
                                 for indicator_code in selected_indicator_codes:
-                                    # Query technical indicators from daily_equity_technicals table
-                                    cur.execute(f"""
-                                        SELECT trade_date, {indicator_code}
-                                        FROM daily_equity_technicals
-                                        WHERE symbol = %s
-                                          AND trade_date >= %s
-                                          AND trade_date <= %s
-                                          AND {indicator_code} IS NOT NULL
-                                        ORDER BY trade_date
-                                    """, (equity_ctx['symbol'], equity_ctx['start_date'], equity_ctx['end_date']))
-                                    
-                                    results = cur.fetchall()
-                                    if results:
-                                        dates = [r[0] for r in results]
-                                        values = [r[1] for r in results]
-                                        indicator_data[indicator_code] = {'dates': dates, 'values': values}
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not load technical indicators: {str(e)}")
+                                    # RSI indicators with different periods
+                                    if indicator_code in ['rsi_7', 'rsi_14', 'rsi_21']:
+                                        period = int(indicator_code.split('_')[1])
+                                        rsi_values = calculate_rsi_realtime(hist_data['Close'], period)
+                                        indicator_data[indicator_code] = {
+                                            'dates': hist_data.index.tolist(),
+                                            'values': rsi_values.tolist()
+                                        }
+                                    # EMA indicators with different periods
+                                    elif indicator_code in ['ema_12', 'ema_26', 'ema_50', 'ema_100']:
+                                        period = int(indicator_code.split('_')[1])
+                                        ema_values = calculate_ema_realtime(hist_data['Close'], period)
+                                        indicator_data[indicator_code] = {
+                                            'dates': hist_data.index.tolist(),
+                                            'values': ema_values.tolist()
+                                        }
+                                    elif indicator_code == 'macd':
+                                        # Calculate MACD with configurable parameters
+                                        macd_line, _, _ = calculate_macd_realtime(hist_data['Close'], macd_fast, 26, 9)
+                                        indicator_data[indicator_code] = {
+                                            'dates': hist_data.index.tolist(),
+                                            'values': macd_line.tolist()
+                                        }
+                                    elif indicator_code == 'macd_signal':
+                                        # Calculate MACD Signal line
+                                        _, signal_line, _ = calculate_macd_realtime(hist_data['Close'], macd_fast, 26, 9)
+                                        indicator_data[indicator_code] = {
+                                            'dates': hist_data.index.tolist(),
+                                            'values': signal_line.tolist()
+                                        }
+                                    elif indicator_code == 'sma_20':
+                                        # Calculate SMA
+                                        sma_values = hist_data['Close'].rolling(window=20).mean()
+                                        indicator_data[indicator_code] = {
+                                            'dates': hist_data.index.tolist(),
+                                            'values': sma_values.tolist()
+                                        }
+                            except Exception as e:
+                                st.warning(f"⚠️ Real-time calculation failed, falling back to database: {str(e)}")
+                                use_realtime = False
+                        
+                        if not use_realtime:
+                            # Database lookup (original method)
+                            try:
+                                conn = st.session_state.db_manager.get_connection()
+                                with conn:
+                                    with conn.cursor() as cur:
+                                        for indicator_code in selected_indicator_codes:
+                                            # Query technical indicators from daily_equity_technicals table
+                                            cur.execute(f"""
+                                                SELECT trade_date, {indicator_code}
+                                                FROM daily_equity_technicals
+                                                WHERE symbol = %s
+                                                  AND trade_date >= %s
+                                                  AND trade_date <= %s
+                                                  AND {indicator_code} IS NOT NULL
+                                                ORDER BY trade_date
+                                            """, (equity_ctx['symbol'], equity_ctx['start_date'], equity_ctx['end_date']))
+                                            
+                                            results = cur.fetchall()
+                                            if results:
+                                                dates = [r[0] for r in results]
+                                                values = [r[1] for r in results]
+                                                indicator_data[indicator_code] = {'dates': dates, 'values': values}
+                            except Exception as e:
+                                st.warning(f"⚠️ Could not load technical indicators: {str(e)}")
                 
-                if hist_data.empty:
-                    st.error(f"❌ No price data found for {equity_ctx['symbol']} in the specified period.")
-                else:
-                    # Create candlestick chart
-                    fig = go.Figure(data=go.Candlestick(
-                        x=hist_data.index,
-                        open=hist_data['Open'],
-                        high=hist_data['High'],
-                        low=hist_data['Low'],
-                        close=hist_data['Close'],
-                        name=equity_ctx['symbol']
-                    ))
-                    
-                    # Add technical indicators as overlays
-                    if indicator_data:
-                        colors = ['red', 'blue', 'green', 'purple', 'orange']  # Colors for indicators
-                        for i, (indicator_code, data) in enumerate(indicator_data.items()):
-                            if i < len(colors):
-                                # Get display name for indicator
-                                display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
-                                
-                                fig.add_trace(go.Scatter(
-                                    x=data['dates'],
-                                    y=data['values'],
-                                    mode='lines',
-                                    name=display_name,
-                                    line=dict(color=colors[i], width=2),
-                                    yaxis='y2'  # Use secondary y-axis for indicators
-                                ))
+                # Add indicators to chart if they were calculated
+                if indicator_data:
+                    colors = ['red', 'blue', 'green', 'purple', 'orange']  # Colors for indicators
+                    for i, (indicator_code, data) in enumerate(indicator_data.items()):
+                        if i < len(colors):
+                            # Get display name for indicator
+                            display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
+                            
+                            fig.add_trace(go.Scatter(
+                                x=data['dates'],
+                                y=data['values'],
+                                mode='lines',
+                                name=display_name,
+                                line=dict(color=colors[i], width=2),
+                                yaxis='y2'  # Use secondary y-axis for indicators
+                            ))
                     
                     # Update layout - enable legend when indicators are shown
                     layout_config = {
@@ -3748,54 +4123,58 @@ elif st.session_state.current_page == 'equity_analysis':
                         )
                     
                     fig.update_layout(**layout_config)
-                    
-                    # Display the chart
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Show indicator summary if any are selected
-                    if indicator_data and overlay_enabled:
-                        with st.expander("📊 Technical Indicators Summary", expanded=False):
-                            indicator_col1, indicator_col2, indicator_col3 = st.columns(3)
-                            for i, (indicator_code, data) in enumerate(indicator_data.items()):
-                                display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
-                                latest_value = data['values'][-1] if data['values'] else 'N/A'
-                                col = [indicator_col1, indicator_col2, indicator_col3][i % 3]
-                                with col:
-                                    st.metric(display_name, f"{latest_value:.2f}" if isinstance(latest_value, (int, float)) else str(latest_value))
-                    
-                    # Display key statistics
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("Start Price", f"HK${hist_data['Close'].iloc[0]:.2f}")
-                    with col2:
-                        st.metric("End Price", f"HK${hist_data['Close'].iloc[-1]:.2f}")
-                    with col3:
-                        price_change = hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[0]
-                        price_change_pct = (price_change / hist_data['Close'].iloc[0]) * 100
-                        st.metric("Total Return", f"{price_change_pct:+.2f}%", f"HK${price_change:+.2f}")
-                    with col4:
-                        volatility = hist_data['Close'].pct_change().std() * (252 ** 0.5) * 100  # Annualized volatility
-                        st.metric("Volatility (Annual)", f"{volatility:.2f}%")
-                    
-                    # Volume chart (no header text for compact display)
-                    fig_volume = go.Figure()
-                    fig_volume.add_trace(go.Bar(
+                
+                # Always display the chart (basic chart or chart with indicators)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show indicator summary if any are selected
+                if indicator_data and st.session_state.show_indicators_clicked:
+                    with st.expander("📊 Technical Indicators Summary", expanded=False):
+                        indicator_col1, indicator_col2, indicator_col3 = st.columns(3)
+                        for i, (indicator_code, data) in enumerate(indicator_data.items()):
+                            display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
+                            latest_value = data['values'][-1] if data['values'] else 'N/A'
+                            col = [indicator_col1, indicator_col2, indicator_col3][i % 3]
+                            with col:
+                                st.metric(display_name, f"{latest_value:.2f}" if isinstance(latest_value, (int, float)) else str(latest_value))
+                
+                # Display key statistics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Start Price", f"HK${hist_data['Close'].iloc[0]:.2f}")
+                with col2:
+                    st.metric("End Price", f"HK${hist_data['Close'].iloc[-1]:.2f}")
+                with col3:
+                    price_change = hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[0]
+                    price_change_pct = (price_change / hist_data['Close'].iloc[0]) * 100
+                    st.metric("Total Return", f"{price_change_pct:+.2f}%", f"HK${price_change:+.2f}")
+                with col4:
+                    volatility = hist_data['Close'].pct_change().std() * (252 ** 0.5) * 100  # Annualized volatility
+                    st.metric("Volatility (Annual)", f"{volatility:.2f}%")
+                
+                # Volume chart (no header text for compact display)
+                fig_volume = go.Figure()
+                fig_volume.add_trace(go.Bar(
                         x=hist_data.index,
                         y=hist_data['Volume'],
                         name='Volume',
                         marker_color='lightblue'
                     ))
-                    
-                    fig_volume.update_layout(
-                        title=f"{equity_ctx['symbol']} - Trading Volume",
-                        yaxis_title="Volume",
-                        xaxis_title="Date",
-                        height=300,
-                        showlegend=False
-                    )
-                    
-                    st.plotly_chart(fig_volume, use_container_width=True)
+                
+                fig_volume.update_layout(
+                    title=f"{equity_ctx['symbol']} - Trading Volume",
+                    yaxis_title="Volume",
+                    xaxis_title="Date",
+                    height=300,
+                    showlegend=False
+                )
+                
+                st.plotly_chart(fig_volume, use_container_width=True)
+                
+                # Reset the indicator click flag after chart processing is complete
+                if st.session_state.show_indicators_clicked:
+                    st.session_state.show_indicators_clicked = False
                     
         except Exception as e:
             st.error(f"❌ Error loading chart data: {str(e)}")

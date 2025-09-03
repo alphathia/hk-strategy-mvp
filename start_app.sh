@@ -59,4 +59,4 @@ echo "Press Ctrl+C to stop the application"
 echo ""
 
 # Start the application
-streamlit run dashboard_editable.py --server.port 8501 --server.address 0.0.0.0
+streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
