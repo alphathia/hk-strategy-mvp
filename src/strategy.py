@@ -383,23 +383,39 @@ class HKStrategyEngine(HKStrategy):
         return SignalResult(A=A, B=B, C=C, D=D, reasons=reasons, recommendation=recommendation)
 
     def save_signal_to_db(self, ticker: str, signals: SignalResult, indicators: Indicators):
-        """Save signals to PostgreSQL"""
+        """Save signals to PostgreSQL using corrected TXYZN format"""
         # Determine primary signal type using new TXYZN convention
+        # Strategy Base + Magnitude understanding
         if signals.A:
             signal_type = 'BBRK9'  # Strong Buy Breakout, strength 9
+            strategy_base = 'BBRK'
+            signal_magnitude = 9
             signal_strength = 0.9
+            strategy_category = 'breakout'
         elif signals.B:
             signal_type = 'BRSV7'  # Buy RSI Reversal, strength 7 
+            strategy_base = 'BRSV'
+            signal_magnitude = 7
             signal_strength = 0.8
+            strategy_category = 'mean-reversion'
         elif signals.C:
             signal_type = 'SBRK3'  # Sell Breakdown, strength 3
+            strategy_base = 'SBRK'
+            signal_magnitude = 3
             signal_strength = 0.7
+            strategy_category = 'breakout'
         elif signals.D:
             signal_type = 'SOVB1'  # Sell Overbought, strength 1
+            strategy_base = 'SOVB'
+            signal_magnitude = 1
             signal_strength = 0.6
+            strategy_category = 'mean-reversion'
         else:
             signal_type = 'HMOM5'  # Hold Momentum, strength 5 (default)
+            strategy_base = 'HMOM'
+            signal_magnitude = 5
             signal_strength = 0.5
+            strategy_category = 'trend'
 
         self.db.insert_trading_signal(
             symbol=ticker,
@@ -410,7 +426,11 @@ class HKStrategyEngine(HKStrategy):
             ma_5=indicators.ema5,
             ma_20=indicators.ema20,
             ma_50=indicators.ema50,
-            volume=indicators.volume
+            volume=indicators.volume,
+            # New TXYZN format fields
+            strategy_base=strategy_base,
+            signal_magnitude=signal_magnitude,
+            strategy_category=strategy_category
         )
 
     def generate_signals_for_watchlist(self) -> Dict:

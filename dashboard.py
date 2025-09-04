@@ -51,6 +51,7 @@ def select_indicators_dialog():
         ("EMA (50)", "ema_50"),
         ("EMA (100)", "ema_100"),
         ("Bollinger Upper", "bollinger_upper"),
+        ("Bollinger Middle", "bollinger_middle"),
         ("Bollinger Lower", "bollinger_lower"),
         ("Volume SMA (20)", "volume_sma_20")
     ]
@@ -1195,6 +1196,7 @@ def fetch_and_store_yahoo_data(symbol: str, start_date: str, end_date: str):
                     sma = hist_data['Close'].rolling(window=bb_period).mean()
                     std = hist_data['Close'].rolling(window=bb_period).std()
                     hist_data['bollinger_upper'] = sma + (std * bb_std)
+                    hist_data['bollinger_middle'] = sma  # Middle band is the 20-day SMA
                     hist_data['bollinger_lower'] = sma - (std * bb_std)
                     
                     # Volume SMA
@@ -1205,9 +1207,9 @@ def fetch_and_store_yahoo_data(symbol: str, start_date: str, end_date: str):
                         cur.execute("""
                             INSERT INTO daily_equity_technicals (
                                 symbol, trade_date, open_price, close_price, high_price, low_price, volume,
-                                rsi_14, macd, macd_signal, bollinger_upper, bollinger_lower, 
+                                rsi_14, macd, macd_signal, bollinger_upper, bollinger_middle, bollinger_lower, 
                                 sma_20, ema_12, ema_26, volume_sma_20
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (symbol, trade_date) 
                             DO UPDATE SET
                                 open_price = EXCLUDED.open_price,
@@ -1219,6 +1221,7 @@ def fetch_and_store_yahoo_data(symbol: str, start_date: str, end_date: str):
                                 macd = EXCLUDED.macd,
                                 macd_signal = EXCLUDED.macd_signal,
                                 bollinger_upper = EXCLUDED.bollinger_upper,
+                                bollinger_middle = EXCLUDED.bollinger_middle,
                                 bollinger_lower = EXCLUDED.bollinger_lower,
                                 sma_20 = EXCLUDED.sma_20,
                                 ema_12 = EXCLUDED.ema_12,
@@ -1236,6 +1239,7 @@ def fetch_and_store_yahoo_data(symbol: str, start_date: str, end_date: str):
                             convert_for_database(row.get('macd')), 
                             convert_for_database(row.get('macd_signal')),
                             convert_for_database(row.get('bollinger_upper')), 
+                            convert_for_database(row.get('bollinger_middle')),
                             convert_for_database(row.get('bollinger_lower')),
                             convert_for_database(row.get('sma_20')), 
                             convert_for_database(row.get('ema_12')), 
@@ -1413,7 +1417,10 @@ def fetch_technical_analysis_data(symbol: str):
                 atr_14,
                 support_level,
                 close_price,
-                trade_date
+                trade_date,
+                bollinger_upper,
+                bollinger_middle,
+                bollinger_lower
             FROM daily_equity_technicals 
             WHERE symbol = %s 
             ORDER BY trade_date DESC 
@@ -1438,7 +1445,10 @@ def fetch_technical_analysis_data(symbol: str):
                 'atr_14': result[10],
                 'support_level': result[11],
                 'close_price': result[12],
-                'trade_date': result[13]
+                'trade_date': result[13],
+                'bollinger_upper': result[14],
+                'bollinger_middle': result[15],
+                'bollinger_lower': result[16]
             }
         else:
             # Return fallback data if no technical data found
@@ -1470,6 +1480,13 @@ def get_fallback_technical_data(symbol: str):
             rsi = 100 - (100 / (1 + rs))
             current_rsi = rsi.iloc[-1] if not rsi.empty else 50.0
             
+            # Calculate Bollinger Bands
+            sma_20 = hist['Close'].rolling(20).mean().iloc[-1]
+            std_20 = hist['Close'].rolling(20).std().iloc[-1]
+            bollinger_upper = sma_20 + (2 * std_20)
+            bollinger_middle = sma_20
+            bollinger_lower = sma_20 - (2 * std_20)
+            
             return {
                 'day_high': day_high,
                 'day_low': day_low,
@@ -1478,13 +1495,16 @@ def get_fallback_technical_data(symbol: str):
                 'rsi_14': current_rsi,
                 'ema_12': current_price * 1.01,  # Approximation
                 'ema_26': current_price * 0.99,  # Approximation
-                'sma_20': hist['Close'].rolling(20).mean().iloc[-1],
+                'sma_20': sma_20,
                 'macd': 0.5,  # Placeholder
                 'volume_ratio': 1.0,  # Placeholder
                 'atr_14': (day_high - day_low),
                 'support_level': week_52_low * 1.05,
                 'close_price': current_price,
-                'trade_date': hist.index[-1].date()
+                'trade_date': hist.index[-1].date(),
+                'bollinger_upper': bollinger_upper,
+                'bollinger_middle': bollinger_middle,
+                'bollinger_lower': bollinger_lower
             }
     except:
         pass
@@ -1504,7 +1524,10 @@ def get_fallback_technical_data(symbol: str):
         'atr_14': 8.45,
         'support_level': 310.00,
         'close_price': 320.00,
-        'trade_date': None
+        'trade_date': None,
+        'bollinger_upper': 335.20,
+        'bollinger_middle': 319.60,
+        'bollinger_lower': 304.00
     }
 
 @st.cache_data
@@ -3914,7 +3937,8 @@ elif st.session_state.current_page == 'equity_analysis':
                     ("MACD", "macd"), ("MACD Signal", "macd_signal"), ("SMA (20)", "sma_20"),
                     ("EMA (12)", "ema_12"), ("EMA (26)", "ema_26"), ("EMA (50)", "ema_50"),
                     ("EMA (100)", "ema_100"), ("Bollinger Upper", "bollinger_upper"),
-                    ("Bollinger Lower", "bollinger_lower"), ("Volume SMA (20)", "volume_sma_20")
+                    ("Bollinger Middle", "bollinger_middle"), ("Bollinger Lower", "bollinger_lower"), 
+                    ("Volume SMA (20)", "volume_sma_20")
                 ]
                 selected_names = []
                 for code in st.session_state.confirmed_indicators:
@@ -4056,6 +4080,22 @@ elif st.session_state.current_page == 'equity_analysis':
                                             'dates': hist_data.index.tolist(),
                                             'values': sma_values.tolist()
                                         }
+                                    elif indicator_code in ['bollinger_upper', 'bollinger_lower', 'bollinger_middle']:
+                                        # Calculate Bollinger Bands (20-period, 2 standard deviations)
+                                        sma_20 = hist_data['Close'].rolling(window=20).mean()
+                                        std_20 = hist_data['Close'].rolling(window=20).std()
+                                        
+                                        if indicator_code == 'bollinger_upper':
+                                            values = sma_20 + (2 * std_20)
+                                        elif indicator_code == 'bollinger_lower':
+                                            values = sma_20 - (2 * std_20)
+                                        else:  # bollinger_middle
+                                            values = sma_20
+                                            
+                                        indicator_data[indicator_code] = {
+                                            'dates': hist_data.index.tolist(),
+                                            'values': values.tolist()
+                                        }
                             except Exception as e:
                                 st.warning(f"⚠️ Real-time calculation failed, falling back to database: {str(e)}")
                                 use_realtime = False
@@ -4088,38 +4128,115 @@ elif st.session_state.current_page == 'equity_analysis':
                 
                 # Add indicators to chart if they were calculated
                 if indicator_data:
-                    colors = ['red', 'blue', 'green', 'purple', 'orange']  # Colors for indicators
-                    for i, (indicator_code, data) in enumerate(indicator_data.items()):
-                        if i < len(colors):
-                            # Get display name for indicator
-                            display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
-                            
+                    # Check for Bollinger Bands special handling
+                    bollinger_indicators = {}
+                    regular_indicators = {}
+                    
+                    for indicator_code, data in indicator_data.items():
+                        if indicator_code in ['bollinger_upper', 'bollinger_lower', 'bollinger_middle']:
+                            bollinger_indicators[indicator_code] = data
+                        else:
+                            regular_indicators[indicator_code] = data
+                    
+                    # Handle Bollinger Bands as special overlay (on primary y-axis with price)
+                    if bollinger_indicators:
+                        # Add Bollinger Upper Band
+                        if 'bollinger_upper' in bollinger_indicators:
                             fig.add_trace(go.Scatter(
-                                x=data['dates'],
-                                y=data['values'],
+                                x=bollinger_indicators['bollinger_upper']['dates'],
+                                y=bollinger_indicators['bollinger_upper']['values'],
                                 mode='lines',
-                                name=display_name,
-                                line=dict(color=colors[i], width=2),
-                                yaxis='y2'  # Use secondary y-axis for indicators
+                                name='BB Upper',
+                                line=dict(color='rgba(255, 0, 0, 0.8)', width=1, dash='dot'),
+                                showlegend=True
                             ))
+                        
+                        # Add Bollinger Lower Band  
+                        if 'bollinger_lower' in bollinger_indicators:
+                            fig.add_trace(go.Scatter(
+                                x=bollinger_indicators['bollinger_lower']['dates'],
+                                y=bollinger_indicators['bollinger_lower']['values'],
+                                mode='lines',
+                                name='BB Lower',
+                                line=dict(color='rgba(0, 255, 0, 0.8)', width=1, dash='dot'),
+                                showlegend=True
+                            ))
+                        
+                        # Add Middle Band (20-day SMA) if available
+                        if 'bollinger_middle' in bollinger_indicators:
+                            fig.add_trace(go.Scatter(
+                                x=bollinger_indicators['bollinger_middle']['dates'],
+                                y=bollinger_indicators['bollinger_middle']['values'],
+                                mode='lines',
+                                name='BB Middle (SMA20)',
+                                line=dict(color='rgba(128, 128, 128, 0.8)', width=1),
+                                showlegend=True
+                            ))
+                        
+                        # Add shaded area between bands if both upper and lower exist
+                        if 'bollinger_upper' in bollinger_indicators and 'bollinger_lower' in bollinger_indicators:
+                            fig.add_trace(go.Scatter(
+                                x=bollinger_indicators['bollinger_upper']['dates'],
+                                y=bollinger_indicators['bollinger_upper']['values'],
+                                mode='lines',
+                                line=dict(width=0),
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ))
+                            fig.add_trace(go.Scatter(
+                                x=bollinger_indicators['bollinger_lower']['dates'],
+                                y=bollinger_indicators['bollinger_lower']['values'],
+                                mode='lines',
+                                fill='tonexty',
+                                fillcolor='rgba(68, 68, 68, 0.1)',
+                                line=dict(width=0),
+                                name='Bollinger Band',
+                                showlegend=True,
+                                hovertemplate='Bollinger Band Zone<extra></extra>'
+                            ))
+                    
+                    # Handle regular indicators on secondary y-axis
+                    if regular_indicators:
+                        colors = ['blue', 'purple', 'orange', 'brown', 'pink']
+                        for i, (indicator_code, data) in enumerate(regular_indicators.items()):
+                            if i < len(colors):
+                                # Get display name for indicator
+                                display_name = next((name for name, code in available_indicators if code == indicator_code), indicator_code)
+                                
+                                fig.add_trace(go.Scatter(
+                                    x=data['dates'],
+                                    y=data['values'],
+                                    mode='lines',
+                                    name=display_name,
+                                    line=dict(color=colors[i], width=2),
+                                    yaxis='y2'  # Use secondary y-axis for non-Bollinger indicators
+                                ))
                     
                     # Update layout - enable legend when indicators are shown
                     layout_config = {
-                        'title': f"{equity_ctx['company_name']} ({equity_ctx['symbol']}) - Price Chart<br><sub>Period: {equity_ctx['start_date']} to {equity_ctx['end_date']}</sub>",
+                        'title': f"{equity_ctx['company_name']} ({equity_ctx['symbol']}) - Price Chart with Technical Analysis<br><sub>Period: {equity_ctx['start_date']} to {equity_ctx['end_date']}</sub>",
                         'yaxis': dict(title="Price (HKD)", side='left'),
                         'xaxis_title': "Date",
-                        'height': 600,
-                        'showlegend': bool(indicator_data),  # Show legend when indicators are present
-                        'xaxis_rangeslider_visible': False
+                        'height': 650,
+                        'showlegend': True,  # Always show legend when indicators are present
+                        'xaxis_rangeslider_visible': False,
+                        'legend': dict(
+                            x=0,
+                            y=1,
+                            bgcolor='rgba(255, 255, 255, 0.8)',
+                            bordercolor='rgba(0, 0, 0, 0.2)',
+                            borderwidth=1
+                        )
                     }
                     
-                    # Add secondary y-axis for technical indicators
-                    if indicator_data:
+                    # Add secondary y-axis only if there are regular indicators
+                    if regular_indicators:
                         layout_config['yaxis2'] = dict(
                             title="Indicator Values",
                             side='right',
                             overlaying='y',
-                            showgrid=False
+                            showgrid=False,
+                            zeroline=False
                         )
                     
                     fig.update_layout(**layout_config)
@@ -4200,11 +4317,11 @@ elif st.session_state.current_page == 'equity_analysis':
             st.rerun()
 
 elif st.session_state.current_page == 'strategy_editor':
-    # Strategic Signal Management Dashboard
-    st.subheader("⚙️ Strategic Signal Management")
-    st.markdown("*Professional TXYZn signal management with evidence tracking and 21 technical indicators*")
+    # Strategy Editor - Updated for correct TXYZN understanding
+    st.subheader("⚙️ Strategy Editor")
+    st.markdown("*Manage trading strategy bases (BBRK, SBDN, BDIV, etc.) and their signal magnitudes (1-9)*")
     
-    # Initialize database connection for Strategic Signal System
+    # Initialize database connection
     try:
         db_manager = DatabaseManager()
         conn = db_manager.get_connection()
@@ -4212,49 +4329,48 @@ elif st.session_state.current_page == 'strategy_editor':
         st.error(f"❌ Database connection failed: {str(e)}")
         st.stop()
     
-    # Tab navigation for different management areas
+    # Tab navigation for different areas
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Strategy Overview", 
-        "🎯 Signal Events", 
-        "📈 Indicators", 
-        "✅ System Status"
+        "🎯 Strategy Bases", 
+        "📊 Signal Magnitudes", 
+        "📈 Recent Signals", 
+        "⚙️ Configuration"
     ])
     
     with tab1:
-        # Strategy Management Interface
-        st.markdown("### Strategy Management")
-        st.markdown("*Manage 108 TXYZn strategic signal combinations*")
+        # Strategy Base Management (BBRK, SBDN, BDIV, etc.)
+        st.markdown("### Strategy Base Catalog")
+        st.markdown("*These are the actual strategies - the 'XYZ' part of TXYZN format*")
         
-        # Strategy Statistics
         try:
             cur = conn.cursor()
             
-            # Get strategy statistics
+            # Get strategy base statistics from our new strategy_catalog table
             cur.execute("""
             SELECT 
-                COUNT(*) as total_strategies,
-                COUNT(DISTINCT base_strategy) as base_strategies,
+                COUNT(*) as total_base_strategies,
                 COUNT(DISTINCT category) as categories,
-                COUNT(CASE WHEN side = 'B' THEN 1 END) as buy_strategies,
-                COUNT(CASE WHEN side = 'S' THEN 1 END) as sell_strategies
-            FROM strategy
+                COUNT(CASE WHEN signal_side = 'B' THEN 1 END) as buy_strategies,
+                COUNT(CASE WHEN signal_side = 'S' THEN 1 END) as sell_strategies,
+                COUNT(CASE WHEN signal_side = 'H' THEN 1 END) as hold_strategies
+            FROM strategy_catalog
             """)
             stats = cur.fetchone()
             
             if stats:
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
-                    st.metric("Total Strategies", stats[0])
+                    st.metric("Base Strategies", stats[0] or 0)
                 with col2:
-                    st.metric("Base Strategies", stats[1])
+                    st.metric("Categories", stats[1] or 0)
                 with col3:
-                    st.metric("Categories", stats[2])
+                    st.metric("Buy Strategies", stats[2] or 0)
                 with col4:
-                    st.metric("Buy Strategies", stats[3])
+                    st.metric("Sell Strategies", stats[3] or 0)
                 with col5:
-                    st.metric("Sell Strategies", stats[4])
+                    st.metric("Hold Strategies", stats[4] or 0)
             
-            # Strategy Filters
+            # Strategy Base Filters
             col1, col2, col3 = st.columns(3)
             with col1:
                 category_filter = st.selectbox(
@@ -4262,295 +4378,452 @@ elif st.session_state.current_page == 'strategy_editor':
                     ["All", "breakout", "mean-reversion", "trend", "divergence", "level"]
                 )
             with col2:
-                side_filter = st.selectbox("Side Filter:", ["All", "B", "S"])
+                side_filter = st.selectbox("Signal Side Filter:", ["All", "B", "S", "H"])
             with col3:
-                strength_filter = st.selectbox("Strength Filter:", ["All"] + list(range(1, 10)))
+                complexity_filter = st.selectbox("Complexity Filter:", ["All", "simple", "moderate", "complex"])
             
             # Build query with filters
-            query = "SELECT strategy_key, base_strategy, side, strength, name, description, category FROM strategy WHERE 1=1"
+            query = """
+            SELECT strategy_base, strategy_name, signal_side, category, description, 
+                   required_indicators, optional_indicators, usage_guidelines, 
+                   risk_considerations, market_conditions, implementation_complexity, priority
+            FROM strategy_catalog WHERE 1=1
+            """
             params = []
             
             if category_filter != "All":
                 query += " AND category = %s"
                 params.append(category_filter)
             if side_filter != "All":
-                query += " AND side = %s"
+                query += " AND signal_side = %s"
                 params.append(side_filter)
-            if strength_filter != "All":
-                query += " AND strength = %s"
-                params.append(strength_filter)
+            if complexity_filter != "All":
+                query += " AND implementation_complexity = %s"
+                params.append(complexity_filter)
             
-            query += " ORDER BY category, base_strategy, strength"
+            query += " ORDER BY priority, category, strategy_base"
             
             cur.execute(query, params)
-            strategies = cur.fetchall()
+            base_strategies = cur.fetchall()
             
-            # Display strategies
-            st.markdown("### Strategy Catalog")
-            if strategies:
-                for strategy in strategies:
-                    strategy_key, base_strategy, side, strength, name, description, category = strategy
+            # Display strategy bases
+            st.markdown("### Available Strategy Bases")
+            if base_strategies:
+                for strategy in base_strategies:
+                    base, name, side, category, description, req_indicators, opt_indicators, usage, risks, conditions, complexity, priority = strategy
                     
-                    with st.expander(f"**{strategy_key}** - {name}"):
-                        col1, col2, col3 = st.columns([2, 1, 1])
+                    # Create TXYZN example with different magnitudes
+                    side_name = {"B": "Buy", "S": "Sell", "H": "Hold"}[side]
+                    side_color = {"B": "🟢", "S": "🔴", "H": "🟡"}[side]
+                    
+                    with st.expander(f"{side_color} **{base}** - {name} ({side_name})"):
+                        col1, col2 = st.columns([3, 2])
+                        
                         with col1:
                             st.markdown(f"**Description:** {description}")
-                            st.markdown(f"**Category:** {category}")
+                            st.markdown(f"**Category:** {category.title()}")
+                            st.markdown(f"**Complexity:** {complexity.title()}")
+                            
+                            if usage:
+                                st.markdown(f"**Best Used:** {usage}")
+                            if risks:
+                                st.markdown(f"**Risk Notes:** {risks}")
+                            
+                            # Show market conditions if available
+                            if conditions:
+                                conditions_list = conditions if isinstance(conditions, list) else []
+                                if conditions_list:
+                                    st.markdown(f"**Market Conditions:** {', '.join(conditions_list)}")
+                        
                         with col2:
-                            st.markdown(f"**Side:** {'Buy' if side == 'B' else 'Sell'}")
-                            st.markdown(f"**Base:** {base_strategy}")
-                        with col3:
-                            st.markdown(f"**Strength:** {strength}/9")
-                            strength_color = "🟢" if strength >= 7 else "🟡" if strength >= 4 else "🔴"
-                            st.markdown(f"**Level:** {strength_color}")
+                            st.markdown("**TXYZN Signal Examples:**")
+                            st.markdown(f"• `{base}1` - Weak signal (magnitude 1)")
+                            st.markdown(f"• `{base}5` - Moderate signal (magnitude 5)")  
+                            st.markdown(f"• `{base}9` - Strong signal (magnitude 9)")
+                            
+                            # Show required indicators
+                            if req_indicators:
+                                indicators_list = req_indicators if isinstance(req_indicators, list) else []
+                                if indicators_list and len(indicators_list) > 0:
+                                    st.markdown("**Required Indicators:**")
+                                    for indicator in indicators_list[:3]:  # Show first 3
+                                        st.markdown(f"• {indicator}")
+                                    if len(indicators_list) > 3:
+                                        st.markdown(f"• ... and {len(indicators_list) - 3} more")
             else:
-                st.info("No strategies found matching the selected filters.")
+                st.info("No strategy bases found matching the selected filters.")
         
         except Exception as e:
-            st.error(f"Error loading strategies: {str(e)}")
+            st.error(f"Error loading strategy bases: {str(e)}")
     
     with tab2:
-        # Signal Events Monitoring
-        st.markdown("### Signal Events Monitoring")
-        st.markdown("*Real-time monitoring of TXYZn signal events with evidence*")
+        # Signal Magnitude Management
+        st.markdown("### Signal Magnitude Management")
+        st.markdown("*Configure how magnitude (1-9) reflects signal strength/confidence*")
         
+        # Magnitude explanation
+        st.info("""
+        **Understanding Signal Magnitude (The 'N' in TXYZN):**
+        - Magnitude 1-3: Weak signals (experimental/low confidence)
+        - Magnitude 4-6: Moderate signals (standard trading signals)  
+        - Magnitude 7-9: Strong signals (high confidence/institutional grade)
+        """)
+        
+        # Interactive magnitude simulator
+        st.markdown("### Signal Magnitude Simulator")
+        col1, col2 = st.columns([2, 3])
+        
+        with col1:
+            # Get available strategy bases for simulation
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT strategy_base, strategy_name FROM strategy_catalog ORDER BY strategy_base")
+                available_bases = cur.fetchall()
+                
+                if available_bases:
+                    base_options = [f"{base} - {name}" for base, name in available_bases]
+                    selected_base_display = st.selectbox("Select Strategy Base:", base_options)
+                    selected_base = selected_base_display.split(" - ")[0] if selected_base_display else "BBRK"
+                    
+                    # Magnitude slider
+                    magnitude = st.slider("Signal Magnitude", min_value=1, max_value=9, value=5)
+                    
+                    # Generate example signal
+                    example_signal = f"{selected_base}{magnitude}"
+                    st.markdown(f"**Generated Signal:** `{example_signal}`")
+                else:
+                    st.warning("No strategy bases available")
+            
+            except Exception as e:
+                st.error(f"Error loading strategy bases: {str(e)}")
+        
+        with col2:
+            # Show magnitude characteristics
+            st.markdown("### Magnitude Characteristics")
+            
+            magnitude_info = {
+                1: {"label": "Experimental", "color": "🔴", "desc": "New/untested signals"},
+                2: {"label": "Weak", "color": "🟠", "desc": "Low confidence signals"},  
+                3: {"label": "Light", "color": "🟡", "desc": "Cautionary signals"},
+                4: {"label": "Moderate-", "color": "🟡", "desc": "Below-average confidence"},
+                5: {"label": "Moderate", "color": "🟢", "desc": "Standard trading signal"},
+                6: {"label": "Moderate+", "color": "🟢", "desc": "Above-average confidence"},
+                7: {"label": "Strong", "color": "🔵", "desc": "High confidence signal"},
+                8: {"label": "Very Strong", "color": "🟣", "desc": "Professional grade"},
+                9: {"label": "Extreme", "color": "⚫", "desc": "Institutional grade"}
+            }
+            
+            for mag, info in magnitude_info.items():
+                if 'magnitude' in locals() and mag == magnitude:
+                    st.markdown(f"**{info['color']} {mag}: {info['label']}** - {info['desc']} ← *Selected*")
+                else:
+                    st.markdown(f"{info['color']} {mag}: {info['label']} - {info['desc']}")
+        
+        st.markdown("---")
+        
+        # Show actual trading signals from database (if any exist)
         try:
             cur = conn.cursor()
-            
-            # Get signal event statistics
             cur.execute("""
             SELECT 
                 COUNT(*) as total_signals,
                 COUNT(DISTINCT symbol) as symbols_with_signals,
-                COUNT(DISTINCT signal) as unique_strategies_used,
-                AVG(confidence) as avg_confidence,
-                MAX(timestamp) as latest_signal
-            FROM signal_event
+                COUNT(DISTINCT strategy_base) as unique_bases_used,
+                AVG(signal_magnitude) as avg_magnitude,
+                MAX(created_at) as latest_signal
+            FROM trading_signals
+            WHERE signal_type IS NOT NULL AND strategy_base IS NOT NULL
             """)
             signal_stats = cur.fetchone()
             
-            if signal_stats and signal_stats[0] > 0:
+            if signal_stats and signal_stats[0] and signal_stats[0] > 0:
+                st.markdown("### Recent Trading Signals")
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Signals", signal_stats[0])
                 with col2:
-                    st.metric("Symbols", signal_stats[1])
+                    st.metric("Symbols", signal_stats[1])  
                 with col3:
-                    st.metric("Strategies Used", signal_stats[2])
+                    st.metric("Strategy Bases", signal_stats[2])
                 with col4:
-                    st.metric("Avg Confidence", f"{signal_stats[3]:.1%}" if signal_stats[3] else "N/A")
+                    st.metric("Avg Magnitude", f"{signal_stats[3]:.1f}" if signal_stats[3] else "N/A")
                 
-                # Recent signals
-                st.markdown("### Recent Signal Events")
+                # Show recent signals
                 cur.execute("""
-                SELECT 
-                    se.symbol,
-                    se.signal,
-                    s.name as strategy_name,
-                    se.confidence,
-                    se.strength,
-                    se.timestamp,
-                    se.evidence
-                FROM signal_event se
-                JOIN strategy s ON se.signal = s.strategy_key
-                ORDER BY se.timestamp DESC
+                SELECT ts.symbol, ts.signal_type, ts.strategy_base, ts.signal_magnitude, 
+                       ts.price, ts.created_at, sc.strategy_name
+                FROM trading_signals ts
+                LEFT JOIN strategy_catalog sc ON ts.strategy_base = sc.strategy_base
+                WHERE ts.signal_type IS NOT NULL
+                ORDER BY ts.created_at DESC
                 LIMIT 10
                 """)
                 recent_signals = cur.fetchall()
                 
-                for signal in recent_signals:
-                    symbol, signal_code, strategy_name, confidence, strength, timestamp, evidence = signal
-                    
-                    with st.expander(f"**{symbol}** - {signal_code} ({confidence:.1%} confidence)"):
-                        col1, col2 = st.columns([2, 1])
-                        with col1:
-                            st.markdown(f"**Strategy:** {strategy_name}")
-                            st.markdown(f"**Timestamp:** {timestamp}")
-                            if evidence:
-                                reasons = evidence.get('reasons', [])
-                                if reasons:
-                                    st.markdown("**Reasons:**")
-                                    for reason in reasons:
-                                        st.markdown(f"• {reason}")
-                        with col2:
-                            st.markdown(f"**Strength:** {strength}/9")
-                            st.markdown(f"**Confidence:** {confidence:.1%}")
-                            if evidence and 'score' in evidence:
-                                st.markdown(f"**Score:** {evidence['score']}")
+                if recent_signals:
+                    for signal in recent_signals:
+                        symbol, signal_type, base, magnitude, price, timestamp, strategy_name = signal
+                        magnitude_info_display = magnitude_info.get(magnitude, {"color": "⚪", "label": "Unknown"})
+                        
+                        with st.expander(f"**{symbol}** - {signal_type} {magnitude_info_display['color']}"):
+                            col1, col2 = st.columns([2, 1])
+                            with col1:
+                                st.markdown(f"**Strategy Base:** {base} ({strategy_name or 'Unknown'})")
+                                st.markdown(f"**Signal:** {signal_type}")
+                                st.markdown(f"**Price:** ${price:.2f}")
+                                st.markdown(f"**Timestamp:** {str(timestamp)[:16]}")
+                            with col2:
+                                st.markdown(f"**Magnitude:** {magnitude}/9")
+                                st.markdown(f"**Level:** {magnitude_info_display['label']}")
             else:
-                st.info("No signal events found. Generate some signals to see monitoring data here.")
-                st.markdown("**To generate signals:**")
-                st.markdown("1. Ensure technical indicator data exists")
-                st.markdown("2. Run the Strategic Signal engine")
-                st.markdown("3. Signals will appear here automatically")
+                st.info("No trading signals found in database. Generate some signals to see them here.")
         
         except Exception as e:
-            st.error(f"Error loading signal events: {str(e)}")
+            st.error(f"Error loading signals: {str(e)}")
     
     with tab3:
-        # Indicators Configuration
-        st.markdown("### Technical Indicators Management")
-        st.markdown("*Configure and monitor 21 technical indicators for strategic signals*")
+        # Recent Signals from Database
+        st.markdown("### Recent TXYZN Signals")
+        st.markdown("*View recently generated signals from the trading_signals table*")
         
         try:
             cur = conn.cursor()
             
-            # Get indicator statistics
+            # Check if we have trading signals with the new format
             cur.execute("""
             SELECT 
-                COUNT(DISTINCT indicator_name) as indicator_types,
-                COUNT(*) as total_snapshots,
-                COUNT(DISTINCT symbol) as symbols_covered,
-                MAX(timestamp) as latest_update
-            FROM indicator_snapshot
+                ts.symbol,
+                ts.signal_type,
+                ts.strategy_base,
+                ts.signal_magnitude,
+                ts.signal_strength,
+                ts.price,
+                ts.volume,
+                ts.rsi,
+                ts.created_at,
+                sc.strategy_name,
+                sc.category
+            FROM trading_signals ts
+            LEFT JOIN strategy_catalog sc ON ts.strategy_base = sc.strategy_base
+            WHERE ts.signal_type IS NOT NULL
+            ORDER BY ts.created_at DESC
+            LIMIT 20
             """)
-            indicator_stats = cur.fetchone()
+            signals = cur.fetchall()
             
-            if indicator_stats and indicator_stats[0] > 0:
+            if signals:
+                # Summary statistics
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Indicator Types", indicator_stats[0])
+                    st.metric("Total Recent Signals", len(signals))
                 with col2:
-                    st.metric("Total Snapshots", indicator_stats[1])
+                    unique_symbols = len(set([s[0] for s in signals]))
+                    st.metric("Unique Symbols", unique_symbols)
                 with col3:
-                    st.metric("Symbols Covered", indicator_stats[2])
+                    unique_bases = len(set([s[2] for s in signals if s[2]]))
+                    st.metric("Strategy Bases Used", unique_bases)
                 with col4:
-                    st.metric("Latest Update", str(indicator_stats[3])[:16] if indicator_stats[3] else "N/A")
+                    avg_magnitude = sum([s[3] for s in signals if s[3]]) / len([s[3] for s in signals if s[3]]) if any(s[3] for s in signals) else 0
+                    st.metric("Avg Magnitude", f"{avg_magnitude:.1f}")
                 
-                # Available indicators
-                cur.execute("""
-                SELECT 
-                    indicator_name,
-                    COUNT(*) as snapshot_count,
-                    COUNT(DISTINCT symbol) as symbol_count,
-                    MAX(timestamp) as last_update
-                FROM indicator_snapshot
-                GROUP BY indicator_name
-                ORDER BY indicator_name
-                """)
-                indicators = cur.fetchall()
+                st.markdown("---")
+                st.markdown("### Signal Details")
                 
-                st.markdown("### Available Indicators")
-                for indicator in indicators:
-                    ind_name, snapshot_count, symbol_count, last_update = indicator
-                    
-                    with st.expander(f"**{ind_name.upper()}** ({symbol_count} symbols, {snapshot_count} snapshots)"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown(f"**Snapshots:** {snapshot_count}")
-                            st.markdown(f"**Symbols:** {symbol_count}")
-                        with col2:
-                            st.markdown(f"**Last Update:** {str(last_update)[:16] if last_update else 'N/A'}")
+                # Group signals by symbol for better display
+                from collections import defaultdict
+                signals_by_symbol = defaultdict(list)
+                for signal in signals:
+                    signals_by_symbol[signal[0]].append(signal)
+                
+                for symbol, symbol_signals in signals_by_symbol.items():
+                    with st.expander(f"**{symbol}** ({len(symbol_signals)} signals)"):
+                        for signal in symbol_signals:
+                            symbol, signal_type, strategy_base, magnitude, strength, price, volume, rsi, timestamp, strategy_name, category = signal
                             
-                        # Show recent values for this indicator
-                        cur.execute("""
-                        SELECT symbol, value, timestamp
-                        FROM indicator_snapshot
-                        WHERE indicator_name = %s
-                        ORDER BY timestamp DESC
-                        LIMIT 5
-                        """, (ind_name,))
-                        recent_values = cur.fetchall()
-                        
-                        if recent_values:
-                            st.markdown("**Recent Values:**")
-                            for symbol, value, timestamp in recent_values:
-                                st.markdown(f"• {symbol}: {value:.2f} at {str(timestamp)[:16]}")
+                            col1, col2, col3 = st.columns([3, 2, 2])
+                            with col1:
+                                # Signal info
+                                magnitude_color = "🟢" if magnitude and magnitude >= 7 else "🟡" if magnitude and magnitude >= 4 else "🔴"
+                                st.markdown(f"**{magnitude_color} {signal_type}** - {strategy_name or 'Unknown Strategy'}")
+                                st.markdown(f"Category: {category or 'Unknown'}")
+                                st.markdown(f"Time: {str(timestamp)[:16] if timestamp else 'Unknown'}")
+                            
+                            with col2:
+                                # Strategy details
+                                st.markdown(f"**Strategy Base:** {strategy_base or 'N/A'}")
+                                st.markdown(f"**Magnitude:** {magnitude or 'N/A'}/9")
+                                st.markdown(f"**Strength:** {strength or 'N/A'}")
+                            
+                            with col3:
+                                # Market data
+                                st.markdown(f"**Price:** ${price:.2f}" if price else "Price: N/A")
+                                st.markdown(f"**Volume:** {volume:,}" if volume else "Volume: N/A")
+                                st.markdown(f"**RSI:** {rsi:.1f}" if rsi else "RSI: N/A")
+                            
+                            st.markdown("---")
             else:
-                st.info("No indicator data found. Technical indicators need to be populated.")
-                st.markdown("**To populate indicators:**")
-                st.markdown("1. Run the data integration bridge")
-                st.markdown("2. Connect daily_equity_technicals to indicator_snapshot")
-                st.markdown("3. Indicators will be available for strategic signals")
+                st.info("No signals found in trading_signals table.")
+                st.markdown("**To generate signals:**")
+                st.markdown("1. Run the HK Strategy Engine")
+                st.markdown("2. Signals will be stored in trading_signals table")
+                st.markdown("3. New TXYZN format signals will appear here")
+                
+                # Show signal generation button
+                if st.button("🎯 Generate Test Signals"):
+                    # This would normally call the signal generation engine
+                    st.info("Signal generation feature would be implemented here")
         
         except Exception as e:
-            st.error(f"Error loading indicators: {str(e)}")
+            st.error(f"Error loading signals: {str(e)}")
+            st.markdown("**Debugging Info:**")
+            st.markdown("- Check if trading_signals table exists")
+            st.markdown("- Verify database connection")
+            st.markdown("- Ensure migration was successful")
     
     with tab4:
-        # System Status and Validation
-        st.markdown("### System Status & Validation")
-        st.markdown("*Monitor Strategic Signal System health and data integrity*")
+        # Configuration and System Status
+        st.markdown("### System Configuration")
+        st.markdown("*Configure TXYZN strategy system and monitor database status*")
         
         try:
             cur = conn.cursor()
             
-            # System health checks
-            st.markdown("### Database Health Check")
+            # Database Schema Status
+            st.markdown("### Database Schema Status")
             
-            # Check table existence and record counts
-            tables = [
-                ('strategy', 'Strategic Signal Definitions'),
-                ('parameter_set', 'Parameter Configurations'),
-                ('signal_run', 'Signal Run Executions'),
-                ('signal_event', 'Signal Event Records'),
-                ('indicator_snapshot', 'Technical Indicator Data')
+            # Check our key tables
+            tables_to_check = [
+                ('strategy_catalog', 'Strategy Base Definitions'),
+                ('trading_signals', 'Generated Trading Signals'),
+                ('portfolio_positions', 'Portfolio Holdings'),
+                ('signal_analysis_view', 'Signal Analysis View')
             ]
             
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**Table Status:**")
-                for table, description in tables:
-                    cur.execute(f"SELECT COUNT(*) FROM {table}")
-                    count = cur.fetchone()[0]
-                    status = "✅" if count > 0 else "⚠️"
-                    st.markdown(f"{status} **{table}**: {count} records")
+                for table, description in tables_to_check:
+                    try:
+                        if table == 'signal_analysis_view':
+                            # Check if view exists
+                            cur.execute("""
+                            SELECT COUNT(*) FROM information_schema.views 
+                            WHERE table_name = 'signal_analysis_view'
+                            """)
+                            exists = cur.fetchone()[0] > 0
+                            status = "✅" if exists else "⚠️"
+                            st.markdown(f"{status} **{table}**: {'Available' if exists else 'Missing'}")
+                        else:
+                            cur.execute(f"SELECT COUNT(*) FROM {table}")
+                            count = cur.fetchone()[0]
+                            status = "✅" if count >= 0 else "❌"  # >= 0 because empty tables are still valid
+                            st.markdown(f"{status} **{table}**: {count} records")
+                    except Exception as e:
+                        st.markdown(f"❌ **{table}**: Error ({str(e)[:50]}...)")
             
             with col2:
-                st.markdown("**Signal Format Validation:**")
-                # Test TXYZn format validation
-                test_signals = ["BBRK5", "SOBR7", "INVALID", "BMAC3"]
+                st.markdown("**TXYZN Format Validation:**")
+                # Test TXYZN format patterns
+                test_signals = ["BBRK5", "SOBR7", "HMOM3", "INVALID", "BDIV9"]
                 for test_signal in test_signals:
                     import re
-                    is_valid = bool(re.match(r'^[BS][A-Z]{3}[1-9]$', test_signal))
+                    # Updated pattern to include H for Hold signals
+                    is_valid = bool(re.match(r'^[BSH][A-Z]{3}[1-9]$', test_signal))
                     status = "✅" if is_valid else "❌"
-                    st.markdown(f"{status} **{test_signal}**: {'Valid' if is_valid else 'Invalid'}")
+                    st.markdown(f"{status} **{test_signal}**: {'Valid TXYZN' if is_valid else 'Invalid'}")
             
-            # Data integrity checks
-            st.markdown("### Data Integrity Checks")
+            st.markdown("---")
             
-            # Check for orphaned records
-            cur.execute("""
-            SELECT 
-                COUNT(CASE WHEN s.strategy_key IS NULL THEN 1 END) as orphaned_signals,
-                COUNT(*) as total_signals
-            FROM signal_event se
-            LEFT JOIN strategy s ON se.signal = s.strategy_key
-            """)
-            integrity = cur.fetchone()
+            # Strategy Base Configuration
+            st.markdown("### Strategy Base Summary")
             
-            if integrity:
-                orphaned, total = integrity
-                if orphaned == 0:
-                    st.success(f"✅ Data integrity: All {total} signal events have valid strategy references")
+            try:
+                # Get strategy catalog summary
+                cur.execute("""
+                SELECT 
+                    signal_side,
+                    category,
+                    COUNT(*) as count,
+                    string_agg(strategy_base, ', ' ORDER BY strategy_base) as bases
+                FROM strategy_catalog 
+                GROUP BY signal_side, category 
+                ORDER BY signal_side, category
+                """)
+                catalog_summary = cur.fetchall()
+                
+                if catalog_summary:
+                    for side, category, count, bases in catalog_summary:
+                        side_name = {"B": "Buy", "S": "Sell", "H": "Hold"}[side]
+                        side_color = {"B": "🟢", "S": "🔴", "H": "🟡"}[side]
+                        
+                        with st.expander(f"{side_color} {side_name} - {category.title()} ({count} strategies)"):
+                            st.markdown(f"**Strategy Bases:** {bases}")
+                            st.markdown(f"**Category:** {category}")
+                            st.markdown(f"**Possible Magnitudes:** 1-9 (each base can generate 9 different signal strengths)")
+                            st.markdown(f"**Total Combinations:** {count * 9} possible {side_name.lower()} signals")
                 else:
-                    st.warning(f"⚠️ Found {orphaned} orphaned signal events out of {total} total")
+                    st.warning("No strategy bases found in catalog")
             
-            # Latest activity summary
-            st.markdown("### Recent Activity")
-            cur.execute("""
-            SELECT 
-                'Signal Events' as type,
-                COUNT(*) as count,
-                MAX(timestamp) as latest
-            FROM signal_event
-            WHERE timestamp >= CURRENT_DATE - INTERVAL '7 days'
-            UNION ALL
-            SELECT 
-                'Indicator Updates' as type,
-                COUNT(*) as count,
-                MAX(timestamp) as latest
-            FROM indicator_snapshot
-            WHERE timestamp >= CURRENT_DATE - INTERVAL '7 days'
-            """)
-            activity = cur.fetchall()
+            except Exception as e:
+                st.error(f"Error loading strategy summary: {str(e)}")
             
-            for activity_type, count, latest in activity:
-                st.markdown(f"**{activity_type}**: {count} in last 7 days (Latest: {str(latest)[:16] if latest else 'N/A'})")
-        
+            st.markdown("---")
+            
+            # Migration Status
+            st.markdown("### Migration Status")
+            
+            try:
+                # Check if migration was successful by looking for new columns
+                cur.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'trading_signals' 
+                AND column_name IN ('strategy_base', 'signal_magnitude', 'strategy_category')
+                ORDER BY column_name
+                """)
+                migration_columns = [row[0] for row in cur.fetchall()]
+                
+                expected_columns = ['signal_magnitude', 'strategy_base', 'strategy_category']
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Migration Columns:**")
+                    for col in expected_columns:
+                        status = "✅" if col in migration_columns else "❌"
+                        st.markdown(f"{status} {col}")
+                
+                with col2:
+                    # Check constraint status
+                    st.markdown("**TXYZN Constraints:**")
+                    cur.execute("""
+                    SELECT constraint_name 
+                    FROM information_schema.table_constraints 
+                    WHERE table_name = 'trading_signals' 
+                    AND constraint_type = 'CHECK'
+                    AND constraint_name LIKE '%txyzn%'
+                    """)
+                    constraints = cur.fetchall()
+                    
+                    if constraints:
+                        for constraint in constraints:
+                            st.markdown(f"✅ {constraint[0]}")
+                    else:
+                        st.markdown("⚠️ TXYZN constraints not found")
+                
+                # Overall migration status
+                migration_success = len(migration_columns) == len(expected_columns)
+                if migration_success:
+                    st.success("✅ Database migration to TXYZN format completed successfully!")
+                else:
+                    st.warning(f"⚠️ Migration incomplete. Found {len(migration_columns)}/{len(expected_columns)} expected columns.")
+            
+            except Exception as e:
+                st.error(f"Error checking migration status: {str(e)}")
+                
         except Exception as e:
-            st.error(f"Error checking system status: {str(e)}")
+            st.error(f"Error loading system configuration: {str(e)}")
     
-    # Clean up database connection
+    # Close database connection
     try:
         conn.close()
     except:

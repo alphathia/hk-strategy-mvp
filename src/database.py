@@ -116,6 +116,14 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Check for TXYZN format columns (new schema)
+                    check_txyzn_query = """
+                    SELECT column_name FROM information_schema.columns 
+                    WHERE table_name = 'trading_signals' AND column_name IN ('strategy_base', 'signal_magnitude')
+                    """
+                    txyzn_result = pd.read_sql(check_txyzn_query, conn)
+                    has_txyzn_columns = len(txyzn_result) >= 2
+                    
                     # Check if portfolio_id column exists (multi-portfolio schema)
                     check_query = """
                     SELECT column_name FROM information_schema.columns 
@@ -124,8 +132,38 @@ class DatabaseManager:
                     result = pd.read_sql(check_query, conn)
                     has_portfolio_id = not result.empty
                     
-                    if has_portfolio_id:
-                        # Multi-portfolio schema
+                    if has_txyzn_columns and has_portfolio_id:
+                        # New TXYZN format with multi-portfolio support
+                        query = """
+                        INSERT INTO trading_signals 
+                        (portfolio_id, symbol, signal_type, signal_strength, price, rsi, ma_5, ma_20, ma_50,
+                         bollinger_upper, bollinger_lower, strategy_base, signal_magnitude, strategy_category, volume)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        cur.execute(query, (
+                            portfolio_id or 'DEFAULT', symbol, signal_type, signal_strength, price,
+                            kwargs.get('rsi'), kwargs.get('ma_5'), kwargs.get('ma_20'),
+                            kwargs.get('ma_50'), kwargs.get('bollinger_upper'), kwargs.get('bollinger_lower'),
+                            kwargs.get('strategy_base'), kwargs.get('signal_magnitude'), 
+                            kwargs.get('strategy_category'), kwargs.get('volume')
+                        ))
+                    elif has_txyzn_columns:
+                        # New TXYZN format single portfolio
+                        query = """
+                        INSERT INTO trading_signals 
+                        (symbol, signal_type, signal_strength, price, rsi, ma_5, ma_20, ma_50,
+                         bollinger_upper, bollinger_lower, strategy_base, signal_magnitude, strategy_category, volume)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        cur.execute(query, (
+                            symbol, signal_type, signal_strength, price,
+                            kwargs.get('rsi'), kwargs.get('ma_5'), kwargs.get('ma_20'),
+                            kwargs.get('ma_50'), kwargs.get('bollinger_upper'), kwargs.get('bollinger_lower'),
+                            kwargs.get('strategy_base'), kwargs.get('signal_magnitude'), 
+                            kwargs.get('strategy_category'), kwargs.get('volume')
+                        ))
+                    elif has_portfolio_id:
+                        # Legacy multi-portfolio schema
                         query = """
                         INSERT INTO trading_signals 
                         (portfolio_id, symbol, signal_type, signal_strength, price, rsi, ma_5, ma_20, ma_50,
@@ -139,7 +177,7 @@ class DatabaseManager:
                             kwargs.get('bollinger_lower')
                         ))
                     else:
-                        # Single portfolio schema (backward compatibility)
+                        # Legacy single portfolio schema (backward compatibility)
                         query = """
                         INSERT INTO trading_signals 
                         (symbol, signal_type, signal_strength, price, rsi, ma_5, ma_20, ma_50,
