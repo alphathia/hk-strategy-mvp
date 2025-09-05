@@ -21,7 +21,6 @@ The new signal format follows the convention **T-XYZ-N** where:
 ### Current Signal Types:
 - **BBRK9**: Strong BUY - Breakout above 20-day high + 0.35×ATR (Strength: 9)
 - **BRSV7**: Strong BUY - RSI reversal from oversold with EMA reclaim (Strength: 7)
-- **HMOM5**: HOLD - Neutral momentum signal (Strength: 5)
 - **SBRK3**: SELL - Breakdown below EMA50 - 0.35×ATR (Strength: 3)  
 - **SOVB1**: SELL - Overbought reversal at target levels (Strength: 1)
 
@@ -425,7 +424,7 @@ psql hk_strategy < backups/hk_strategy_backup.sql
    def _determine_custom_signal_type(self, score: float, volume_ratio: float) -> str:
        if score > 0.5 and volume_ratio > 2.0:
            return 'BVWP7'  # Strong volume breakout
-       return 'HMOM5'  # Default to hold
+       return None  # No signal - neutral zone
    ```
 
 2. **Add signal logic** in strategy.py:
