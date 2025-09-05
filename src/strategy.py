@@ -411,11 +411,11 @@ class HKStrategyEngine(HKStrategy):
             signal_strength = 0.6
             strategy_category = 'mean-reversion'
         else:
-            signal_type = 'HMOM5'  # Hold Momentum, strength 5 (default)
-            strategy_base = 'HMOM'
-            signal_magnitude = 5
-            signal_strength = 0.5
-            strategy_category = 'trend'
+            signal_type = None  # No signal - neutral zone
+            strategy_base = None
+            signal_magnitude = None
+            signal_strength = 0.0
+            strategy_category = 'neutral'
 
         self.db.insert_trading_signal(
             symbol=ticker,

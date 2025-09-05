@@ -368,10 +368,10 @@ class SignalDictionary:
             default_parameters={
                 "auto_migrate_to_strategic": True,
                 "migration_mapping": {
-                    "A": "BMOM9",
-                    "B": "BMOM7", 
-                    "C": "HMOM5",
-                    "D": "SMOM3"
+                    "A": "BBRK7",
+                    "B": "BBRK5", 
+                    "C": None,  # No equivalent - legacy hold signals removed
+                    "D": "SBDN3"
                 }
             },
             
@@ -385,7 +385,7 @@ class SignalDictionary:
             color_mapping={
                 "A": "#00C851",  # Green
                 "B": "#33B679",  # Light green
-                "C": "#FFB300",  # Orange
+                "C": "#808080",  # Gray - no signal
                 "D": "#FF4444"   # Red
             },
             

@@ -14,6 +14,14 @@ from enum import Enum
 import hashlib
 import uuid
 
+# Import new level-based analysis modules
+try:
+    from .strategy_level_engine import StrategyLevelEngine
+    from .enhanced_technical_analysis import EnhancedTechnicalAnalysis
+except ImportError:
+    from strategy_level_engine import StrategyLevelEngine
+    from enhanced_technical_analysis import EnhancedTechnicalAnalysis
+
 logger = logging.getLogger(__name__)
 
 class StrategyCategory(Enum):
@@ -293,8 +301,13 @@ class StrategicSignalEngine:
     
     def __init__(self, parameter_set: Optional[Dict] = None):
         self.parameter_set = parameter_set or self._get_default_parameters()
-        self.engine_version = "1.0.0"
+        self.engine_version = "2.0.0"  # Updated for level-based analysis
         self.calculator = TechnicalIndicatorCalculator()
+        
+        # Initialize level-based analysis engines
+        self.level_engine = StrategyLevelEngine()
+        self.enhanced_ta = EnhancedTechnicalAnalysis()
+        self.logger = logging.getLogger(__name__)
         
     def _get_default_parameters(self) -> Dict:
         """Default parameter set for signal generation"""
@@ -324,7 +337,7 @@ class StrategicSignalEngine:
         # Generate signals for each strategy
         strategies = [
             'BBRK', 'BOSR', 'BMAC', 'BBOL', 'BDIV', 'BSUP',  # Buy strategies
-            'SBDN', 'SOBR', 'SMAC', 'SBND', 'SDIV', 'SRES'   # Sell strategies
+            'SBDN', 'SOBR', 'SMAC', 'SDIV', 'SRES'   # Sell strategies (updated names)
         ]
         
         for base_strategy in strategies:
@@ -333,6 +346,91 @@ class StrategicSignalEngine:
                 signals.append(signal)
         
         return signals
+    
+    def generate_signals_enhanced(self, symbol: str, price_data: pd.DataFrame, 
+                        provisional: bool = False) -> List[StrategicSignal]:
+        """Generate signals using enhanced level-based analysis"""
+        if len(price_data) < 100:  # Need more history for comprehensive analysis
+            return []
+        
+        try:
+            # Calculate comprehensive technical indicators
+            technical_data = self.enhanced_ta.calculate_all_indicators(price_data)
+            technical_data['symbol'] = symbol
+            technical_data['bar_date'] = date.today()
+            
+            # Evaluate all base strategies using level engine
+            base_strategies = [
+                'BBRK', 'BOSR', 'BMAC', 'BBOL', 'BDIV', 'BSUP',  # Buy strategies
+                'SBDN', 'SOBR', 'SMAC', 'SDIV', 'SRES'   # Sell strategies (corrected names)
+            ]
+            
+            signals = []
+            for base_strategy in base_strategies:
+                try:
+                    # Use level engine for precise analysis
+                    level_result = self.level_engine.evaluate_strategy_levels(base_strategy, technical_data)
+                    
+                    # Only generate signal if base trigger is met
+                    if level_result.base_trigger_met and level_result.highest_level_met > 0:
+                        signal = self._create_signal_from_level_result(level_result, provisional)
+                        if signal:
+                            signals.append(signal)
+                            
+                except Exception as e:
+                    self.logger.warning(f"Error evaluating {base_strategy} for {symbol}: {e}")
+                    continue
+            
+            return signals
+            
+        except Exception as e:
+            self.logger.error(f"Error generating enhanced signals for {symbol}: {e}")
+            return []
+    
+    def _create_signal_from_level_result(self, level_result, provisional: bool) -> Optional[StrategicSignal]:
+        """Create StrategicSignal from StrategyLevelResult"""
+        try:
+            # Determine action (Buy/Sell) from strategy
+            action = 'B' if level_result.base_strategy.startswith('B') else 'S'
+            
+            # Build reasons from level conditions met
+            reasons = []
+            for condition in level_result.level_conditions:
+                if condition.met:
+                    reasons.append(f"L{condition.level}: {condition.condition_text}")
+            
+            # Build thresholds and score data
+            thresholds = {
+                'highest_level_met': level_result.highest_level_met,
+                'base_trigger_met': level_result.base_trigger_met,
+                'total_levels': len(level_result.level_conditions)
+            }
+            
+            score = {
+                'level_strength': level_result.highest_level_met,
+                'level_percentage': level_result.highest_level_met / 9.0 * 100,
+                'conditions_met': len([c for c in level_result.level_conditions if c.met])
+            }
+            
+            return StrategicSignal(
+                signal_id=str(uuid.uuid4()),
+                symbol=level_result.symbol,
+                bar_date=level_result.bar_date,
+                strategy_key=f"{level_result.base_strategy}{level_result.highest_level_met}",
+                base_strategy=level_result.base_strategy,
+                action=action,
+                strength=level_result.highest_level_met,
+                close_at_signal=level_result.technical_values['close_price'],
+                volume_at_signal=int(level_result.technical_values['volume']),
+                thresholds_json=thresholds,
+                reasons_json=reasons,
+                score_json=score,
+                provisional=provisional
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error creating signal from level result: {e}")
+            return None
     
     def _evaluate_strategy(self, base_strategy: str, indicators: IndicatorSnapshot, 
                           provisional: bool) -> Optional[StrategicSignal]:
@@ -356,8 +454,8 @@ class StrategicSignalEngine:
             return self._evaluate_overbought_reversal(indicators, provisional)
         elif base_strategy == 'SMAC':
             return self._evaluate_ma_crossover_sell(indicators, provisional)
-        elif base_strategy == 'SBND':
-            return self._evaluate_bollinger_breakdown(indicators, provisional)
+        # SBND renamed to SBDN - handled above
+        # elif base_strategy == 'SBND': - DEPRECATED
         elif base_strategy == 'SDIV':
             return self._evaluate_bearish_divergence(indicators, provisional)
         elif base_strategy == 'SRES':
@@ -563,7 +661,7 @@ class StrategicSignalEngine:
         return None
     
     def _evaluate_bollinger_breakdown(self, indicators: IndicatorSnapshot, provisional: bool) -> Optional[StrategicSignal]:
-        """SBND: Sell • Bollinger Breakdown - placeholder"""
+        """SBDN: Sell • Breakdown - Updated implementation"""
         return None
     
     def _evaluate_bearish_divergence(self, indicators: IndicatorSnapshot, provisional: bool) -> Optional[StrategicSignal]:

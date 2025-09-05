@@ -131,38 +131,36 @@ class TradingSignalGenerator:
 
     def _determine_signal_type(self, score: float) -> str:
         if score > 0.6:
-            return 'BMOM9'  # Strong Buy Momentum, strength 9
+            return 'BBRK7'  # Strong Buy Breakout, strength 7
         elif score > 0.2:
-            return 'BMOM7'  # Buy Momentum, strength 7
+            return 'BBRK5'  # Buy Breakout, strength 5
         elif score > -0.2:
-            return 'HMOM5'  # Hold Momentum, strength 5 
+            return None  # No signal - neutral zone
         else:
-            return 'SMOM3'  # Sell Momentum, strength 3
+            return 'SBDN3'  # Sell Breakdown, strength 3
 
     def get_signal_description(self, signal_type: str) -> str:
         descriptions = {
-            'BMOM9': 'Strong Buy - High conviction bullish momentum signal',
-            'BMOM7': 'Buy - Moderate bullish momentum signal', 
-            'HMOM5': 'Hold - Neutral/weak momentum signal',
-            'SMOM3': 'Sell - Bearish momentum signal',
+            'BBRK7': 'Strong Buy - Breakout above resistance with conviction',
+            'BBRK5': 'Buy - Moderate breakout above key levels', 
+            'SBDN3': 'Sell - Breakdown below support levels',
             # Legacy support
             'A': 'Strong Buy - High conviction bullish signal',
             'B': 'Buy - Moderate bullish signal', 
-            'C': 'Hold - Neutral/weak signal',
+            'C': 'No Signal - Neutral zone',
             'D': 'Sell - Bearish signal'
         }
-        return descriptions.get(signal_type, 'Unknown signal')
+        return descriptions.get(signal_type, 'No signal' if signal_type is None else 'Unknown signal')
 
     def get_signal_color(self, signal_type: str) -> str:
         colors = {
-            'BMOM9': '#00C851',  # Dark Green - Strong Buy
-            'BMOM7': '#33B679',  # Light Green - Buy 
-            'HMOM5': '#FFB300',  # Orange - Hold
-            'SMOM3': '#FF4444',  # Red - Sell
+            'BBRK7': '#006400',  # Dark Green - Strong Buy Breakout
+            'BBRK5': '#32CD32',  # Light Green - Buy Breakout 
+            'SBDN3': '#DC143C',  # Crimson - Sell Breakdown
             # Legacy support
             'A': '#00C851',  # Green
             'B': '#33B679',  # Light Green  
-            'C': '#FFB300',  # Orange
+            'C': '#808080',  # Gray - No signal
             'D': '#FF4444'   # Red
         }
-        return colors.get(signal_type, '#666666')
+        return colors.get(signal_type, '#808080' if signal_type is None else '#666666')
