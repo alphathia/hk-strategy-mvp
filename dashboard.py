@@ -4724,7 +4724,7 @@ elif st.session_state.current_page == 'strategy_editor':
             with col2:
                 st.markdown("**TXYZN Format Validation:**")
                 # Test TXYZN format patterns
-                test_signals = ["BBRK5", "SOBR7", "HMOM3", "INVALID", "BDIV9"]
+                test_signals = ["BBRK5", "SOBR7", "BDIV9", "INVALID", "SMAC6"]
                 for test_signal in test_signals:
                     import re
                     # Updated pattern to include H for Hold signals
