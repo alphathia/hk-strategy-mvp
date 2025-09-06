@@ -343,6 +343,14 @@ class TestComponentRegistries:
         assert isinstance(DIALOG_REGISTRY, dict)
         assert callable(get_dialog)
         assert callable(create_dialog)
+        
+        # Test that expected dialogs are registered
+        expected_dialogs = [
+            'indicators', 'create_portfolio', 'copy_portfolio',
+            'add_symbol', 'update_position', 'total_positions', 'active_positions'
+        ]
+        for dialog_type in expected_dialogs:
+            assert dialog_type in DIALOG_REGISTRY
     
     def test_chart_registry_exists(self):
         """Test chart registry exists."""
@@ -351,6 +359,14 @@ class TestComponentRegistries:
         assert isinstance(CHART_REGISTRY, dict)
         assert callable(get_chart)
         assert callable(create_chart)
+        
+        # Test that expected charts are registered
+        expected_charts = [
+            'price', 'simple_price', 'portfolio_allocation', 'portfolio_pnl',
+            'rsi', 'macd', 'bollinger_bands'
+        ]
+        for chart_type in expected_charts:
+            assert chart_type in CHART_REGISTRY
     
     def test_form_registry_exists(self):
         """Test form registry exists."""
@@ -359,6 +375,13 @@ class TestComponentRegistries:
         assert isinstance(FORM_REGISTRY, dict)
         assert callable(get_form)
         assert callable(create_form)
+        
+        # Test that expected forms are registered
+        expected_forms = [
+            'symbol', 'position', 'portfolio', 'date_range'
+        ]
+        for form_type in expected_forms:
+            assert form_type in FORM_REGISTRY
     
     def test_widget_registry_exists(self):
         """Test widget registry exists."""
@@ -367,6 +390,112 @@ class TestComponentRegistries:
         assert isinstance(WIDGET_REGISTRY, dict)
         assert callable(get_widget)
         assert callable(create_widget)
+        
+        # Test that expected widgets are registered
+        expected_widgets = [
+            'metric', 'portfolio_metrics', 'portfolio_selector', 
+            'system_health', 'status'
+        ]
+        for widget_type in expected_widgets:
+            assert widget_type in WIDGET_REGISTRY
+
+
+class TestNewComponents:
+    """Test newly implemented components."""
+    
+    def test_position_dialogs_exist(self):
+        """Test position dialog components exist."""
+        from components.dialogs.position_dialogs import AddSymbolDialog, UpdatePositionDialog
+        
+        add_dialog = AddSymbolDialog("TEST_PORTFOLIO")
+        assert add_dialog is not None
+        assert add_dialog.portfolio_id == "TEST_PORTFOLIO"
+        
+        update_dialog = UpdatePositionDialog("TEST_PORTFOLIO", {"symbol": "0700.HK"})
+        assert update_dialog is not None
+    
+    def test_details_dialogs_exist(self):
+        """Test details dialog components exist."""
+        from components.dialogs.details_dialogs import TotalPositionsDialog, ActivePositionsDialog
+        
+        total_dialog = TotalPositionsDialog({"0700.HK": {"company_name": "Tencent", "sector": "Tech"}})
+        assert total_dialog is not None
+        
+        active_dialog = ActivePositionsDialog({"0700.HK": {"company_name": "Tencent", "sector": "Tech"}})
+        assert active_dialog is not None
+    
+    def test_chart_components_exist(self):
+        """Test chart components exist."""
+        from components.charts.price_chart import PriceChart
+        from components.charts.portfolio_chart import PortfolioAllocationChart
+        from components.charts.indicator_chart import RSIChart
+        
+        price_chart = PriceChart("0700.HK")
+        assert price_chart is not None
+        assert price_chart.symbol == "0700.HK"
+        
+        allocation_chart = PortfolioAllocationChart("Test Portfolio")
+        assert allocation_chart is not None
+        
+        rsi_chart = RSIChart("0700.HK")
+        assert rsi_chart is not None
+    
+    def test_form_components_exist(self):
+        """Test form components exist."""
+        from components.forms.symbol_form import SymbolForm
+        from components.forms.position_form import PositionForm
+        from components.forms.portfolio_form import PortfolioForm
+        from components.forms.date_form import DateRangeForm
+        
+        symbol_form = SymbolForm()
+        assert symbol_form is not None
+        
+        position_form = PositionForm()
+        assert position_form is not None
+        
+        portfolio_form = PortfolioForm()
+        assert portfolio_form is not None
+        
+        date_form = DateRangeForm()
+        assert date_form is not None
+    
+    def test_widget_components_exist(self):
+        """Test widget components exist."""
+        from components.widgets.metric_widget import MetricWidget, PortfolioMetricsWidget
+        from components.widgets.selector_widget import PortfolioSelectorWidget
+        from components.widgets.status_widget import StatusWidget, SystemHealthWidget
+        
+        metric_widget = MetricWidget("test_metric", "Test Metric", 100)
+        assert metric_widget is not None
+        
+        portfolio_metrics = PortfolioMetricsWidget("portfolio_metrics", {"positions": []})
+        assert portfolio_metrics is not None
+        
+        portfolio_selector = PortfolioSelectorWidget("portfolio_selector", [])
+        assert portfolio_selector is not None
+        
+        status_widget = StatusWidget("status", "success", "All systems operational")
+        assert status_widget is not None
+        
+        health_widget = SystemHealthWidget("health")
+        assert health_widget is not None
+    
+    def test_utility_modules_exist(self):
+        """Test utility modules exist."""
+        from src.utils.data_utils import fetch_hk_price, format_currency
+        from src.utils.indicator_utils import calculate_rsi, get_available_indicators
+        from src.utils.chart_utils import get_default_layout_config, create_candlestick_trace
+        from src.utils.validation_utils import validate_symbol, validate_price
+        
+        # Test that functions are callable
+        assert callable(fetch_hk_price)
+        assert callable(format_currency)
+        assert callable(calculate_rsi)
+        assert callable(get_available_indicators)
+        assert callable(get_default_layout_config)
+        assert callable(create_candlestick_trace)
+        assert callable(validate_symbol)
+        assert callable(validate_price)
 
 
 class TestComponentIntegration:
@@ -395,6 +524,39 @@ class TestComponentIntegration:
         chart = CandlestickChart()
         assert isinstance(chart, BaseChart)
     
+    def test_full_component_integration(self):
+        """Test that all component types can be imported together."""
+        try:
+            from components import (
+                # Dialogs
+                AddSymbolDialog, UpdatePositionDialog, TotalPositionsDialog,
+                # Charts
+                PriceChart, PortfolioAllocationChart, RSIChart,
+                # Forms
+                SymbolForm, PositionForm, PortfolioForm,
+                # Widgets
+                MetricWidget, PortfolioMetricsWidget, StatusWidget
+            )
+            
+            # Test that all components can be instantiated
+            add_dialog = AddSymbolDialog("TEST")
+            price_chart = PriceChart("0700.HK")
+            symbol_form = SymbolForm()
+            metric_widget = MetricWidget("test", "Test", 100)
+            
+            assert all([add_dialog, price_chart, symbol_form, metric_widget])
+            
+        except ImportError as e:
+            pytest.fail(f"Failed to import component classes: {e}")
+    
+    def test_component_stats(self):
+        """Test component statistics."""
+        from components import COMPONENT_STATS
+        
+        assert isinstance(COMPONENT_STATS, dict)
+        assert 'total_components' in COMPONENT_STATS
+        assert COMPONENT_STATS['total_components'] > 0
+    
     @patch('streamlit')
     def test_streamlit_integration(self, mock_st):
         """Test components integrate with Streamlit."""
@@ -408,6 +570,87 @@ class TestComponentIntegration:
         assert dialog is not None
         
         # Note: Full rendering tests require Streamlit context
+
+
+class TestPhase5Completion:
+    """Test Phase 5 completion and component extraction success."""
+    
+    def test_all_component_categories_implemented(self):
+        """Test that all component categories have been implemented."""
+        from components import DIALOG_REGISTRY, CHART_REGISTRY, FORM_REGISTRY, WIDGET_REGISTRY
+        
+        # Each category should have multiple components
+        assert len(DIALOG_REGISTRY) >= 5, "Should have extracted at least 5 dialog components"
+        assert len(CHART_REGISTRY) >= 8, "Should have at least 8 chart components"
+        assert len(FORM_REGISTRY) >= 6, "Should have at least 6 form components"
+        assert len(WIDGET_REGISTRY) >= 10, "Should have at least 10 widget components"
+    
+    def test_component_architecture_quality(self):
+        """Test that component architecture follows design patterns."""
+        from components.dialogs import BaseDialog
+        from components.charts import BaseChart
+        from components.forms import BaseForm
+        from components.widgets import BaseWidget
+        
+        # Test abstract base classes have required methods
+        assert hasattr(BaseDialog, 'render_content')
+        assert hasattr(BaseChart, 'prepare_data')
+        assert hasattr(BaseChart, 'build_chart')
+        assert hasattr(BaseForm, 'render_fields')
+        assert hasattr(BaseForm, 'validate')
+        assert hasattr(BaseWidget, 'render_content')
+    
+    def test_utility_modules_completeness(self):
+        """Test that utility modules are comprehensive."""
+        from src.utils import (
+            # Data utilities
+            fetch_hk_price, format_currency, calculate_percentage_change,
+            # Indicator utilities  
+            calculate_rsi, calculate_macd, get_available_indicators,
+            # Chart utilities
+            get_default_layout_config, create_pie_chart, format_chart_for_streamlit,
+            # Validation utilities
+            validate_symbol, validate_portfolio_id, validate_form_data
+        )
+        
+        # Test that all major utility categories are present
+        utility_functions = [
+            fetch_hk_price, format_currency, calculate_percentage_change,
+            calculate_rsi, calculate_macd, get_available_indicators,
+            get_default_layout_config, create_pie_chart, format_chart_for_streamlit,
+            validate_symbol, validate_portfolio_id, validate_form_data
+        ]
+        
+        for func in utility_functions:
+            assert callable(func), f"Utility function {func.__name__} should be callable"
+    
+    def test_component_factory_patterns(self):
+        """Test that factory patterns work for all component types."""
+        from components import create_dialog, create_chart, create_form, create_widget
+        
+        # Test factory functions exist and work
+        assert callable(create_dialog)
+        assert callable(create_chart) 
+        assert callable(create_form)
+        assert callable(create_widget)
+        
+        # Test factory functions can create components (with mock data)
+        try:
+            # These should return None for unknown types rather than error
+            result = create_dialog('unknown_type')
+            assert result is None
+            
+            result = create_chart('unknown_type')  
+            assert result is None
+            
+            result = create_form('unknown_type')
+            assert result is None
+            
+            result = create_widget('unknown_type')
+            assert result is None
+            
+        except Exception as e:
+            pytest.fail(f"Factory functions should handle unknown types gracefully: {e}")
 
 
 if __name__ == '__main__':

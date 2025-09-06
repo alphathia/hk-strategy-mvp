@@ -6,7 +6,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta, date
 import time
 import copy
+import psycopg2
+import redis
 import sys
+import os
+import platform
 import numpy as np
 import logging
 
@@ -28,63 +32,500 @@ except ImportError:
     from analysis_manager import AnalysisManager
     from hkex_calendar import validate_hkex_analysis_period, hkex_calendar
 
-# Import extracted components and utilities (Phase 5)
-try:
-    # Import utility modules
-    from src.utils.data_utils import (
-        fetch_hk_price, fetch_hk_historical_prices, get_company_name,
-        fetch_and_store_yahoo_data, convert_for_database,
-        fetch_equity_prices_by_date, get_yahoo_finance_price_fallback,
-        get_all_portfolios_for_equity_analysis, get_portfolio_analyses_for_equity,
-        get_equities_from_portfolio, get_analysis_period_for_equity
-    )
-    from src.utils.indicator_utils import (
-        calculate_rsi, calculate_rsi_realtime, calculate_macd_realtime,
-        calculate_ema_realtime, fetch_technical_analysis_data, get_fallback_technical_data
-    )
-    from src.utils.chart_utils import (
-        get_default_layout_config, create_candlestick_trace, create_line_trace,
-        create_pie_chart, create_bar_chart
-    )
-    from src.utils.validation_utils import (
-        validate_required, validate_symbol, validate_portfolio_name,
-        validate_quantity, validate_price
+@st.dialog("Select Technical Indicators")
+def select_indicators_dialog():
+    """Modal dialog for selecting technical indicators"""
+    st.markdown("**Select up to 3 technical indicators to overlay on the price chart:**")
+    st.markdown("---")
+    
+    # Available technical indicators
+    available_indicators = [
+        ("RSI (7)", "rsi_7"),
+        ("RSI (14)", "rsi_14"), 
+        ("RSI (21)", "rsi_21"),
+        ("MACD", "macd"),
+        ("MACD Signal", "macd_signal"),
+        ("SMA (20)", "sma_20"),
+        ("EMA (12)", "ema_12"),
+        ("EMA (26)", "ema_26"),
+        ("EMA (50)", "ema_50"),
+        ("EMA (100)", "ema_100"),
+        ("Bollinger Upper", "bollinger_upper"),
+        ("Bollinger Middle", "bollinger_middle"),
+        ("Bollinger Lower", "bollinger_lower"),
+        ("Volume SMA (20)", "volume_sma_20")
+    ]
+    
+    # Initialize selection state if not exists
+    if 'selected_indicators_modal' not in st.session_state:
+        st.session_state.selected_indicators_modal = []
+    
+    # Create checkboxes in a grid layout
+    cols = st.columns(3)
+    selected_count = 0
+    
+    for i, (name, code) in enumerate(available_indicators):
+        col_idx = i % 3
+        with cols[col_idx]:
+            # Check if this indicator is currently selected
+            is_selected = code in st.session_state.selected_indicators_modal
+            
+            # Disable checkbox if 3 are already selected and this one isn't selected
+            max_reached = len(st.session_state.selected_indicators_modal) >= 3 and not is_selected
+            
+            checkbox_result = st.checkbox(
+                name, 
+                value=is_selected, 
+                disabled=max_reached,
+                key=f"modal_indicator_{code}"
+            )
+            
+            # Update selection state
+            if checkbox_result and code not in st.session_state.selected_indicators_modal:
+                if len(st.session_state.selected_indicators_modal) < 3:
+                    st.session_state.selected_indicators_modal.append(code)
+            elif not checkbox_result and code in st.session_state.selected_indicators_modal:
+                st.session_state.selected_indicators_modal.remove(code)
+    
+    selected_count = len(st.session_state.selected_indicators_modal)
+    
+    # Show selection status
+    st.markdown("---")
+    if selected_count == 0:
+        st.info("📊 Select 1-3 indicators to display")
+    elif selected_count >= 3:
+        st.success(f"✅ Maximum selected: {selected_count}/3")
+    else:
+        st.info(f"📊 Selected: {selected_count}/3")
+    
+    # Action buttons
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📊 Show Indicators", disabled=selected_count == 0, type="primary", use_container_width=True):
+            # Store final selection and close modal
+            st.session_state.confirmed_indicators = st.session_state.selected_indicators_modal.copy()
+            st.session_state.show_indicators_clicked = True
+            st.rerun()
+    
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            # Reset modal selection and close
+            st.session_state.selected_indicators_modal = []
+            st.rerun()
+
+@st.dialog("Copy Portfolio")
+def copy_portfolio_dialog(portfolio_id: str):
+    """Modal dialog for copying a portfolio with proper UI"""
+    # Check if portfolio exists
+    if portfolio_id not in st.session_state.portfolios:
+        st.error(f"❌ Portfolio '{portfolio_id}' not found in current session")
+        st.warning("💡 Try refreshing the page or check if the portfolio was recently deleted.")
+        if st.button("🔄 Refresh Portfolios", use_container_width=True):
+            st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+            st.rerun()
+        return
+    
+    original_portfolio = st.session_state.portfolios[portfolio_id]
+    
+    st.markdown(f"**Create a copy of: {original_portfolio['name']}**")
+    st.markdown("---")
+    
+    # Generate default new ID
+    default_new_id = f"{portfolio_id}_Copy"
+    counter = 1
+    while default_new_id in st.session_state.portfolios:
+        default_new_id = f"{portfolio_id}_Copy{counter}"
+        counter += 1
+    
+    # Form inputs with better spacing
+    col1, col2 = st.columns(2)
+    with col1:
+        new_portfolio_id = st.text_input(
+            "Portfolio ID:", 
+            value=default_new_id,
+            help="Unique identifier for the new portfolio"
+        )
+    with col2:
+        new_portfolio_name = st.text_input(
+            "Portfolio Name:",
+            value=f"Copy of {original_portfolio['name']}",
+            help="Display name for the new portfolio"
+        )
+    
+    new_portfolio_desc = st.text_area(
+        "Description (Optional):",
+        value=f"Copy of {original_portfolio['description']}",
+        height=100,
+        help="Optional description for the new portfolio"
     )
     
-    # Import component modules  
-    from src.components.dialogs import (
-        IndicatorsDialog, CreatePortfolioDialog, CopyPortfolioDialog,
-        AddSymbolDialog, UpdatePositionDialog, TotalPositionsDialog, ActivePositionsDialog,
-        create_dialog
-    )
-    from src.components.charts import (
-        PriceChart, PortfolioAllocationChart, PortfolioPnLChart, create_chart
-    )
-    from src.components.forms import (
-        SymbolForm, PositionForm, PortfolioForm, DateRangeForm, create_form
-    )
-    from src.components.widgets import (
-        MetricWidget, PortfolioMetricsWidget, StatusWidget, create_widget
-    )
-except ImportError as e:
-    # Fallback for development/testing - use dummy functions
-    st.warning(f"⚠️ Component modules not fully available: {e}")
-    # Create placeholder functions to prevent crashes
-    def create_dialog(name, **kwargs): return None
-    def create_chart(name, **kwargs): return None
-    def create_form(name, **kwargs): return None
-    def create_widget(name, **kwargs): return None
-    # Placeholder functions for utilities
-    def get_all_portfolios_for_equity_analysis(): return []
-    def get_portfolio_analyses_for_equity(portfolio_id): return []
-    def get_equities_from_portfolio(portfolio_id): return []
-    def get_analysis_period_for_equity(analysis_id): return None
-    def fetch_technical_analysis_data(symbol): return {}
-    def fetch_hk_price(symbol): return None, "Not available"
+    # Validation
+    error_msg = ""
+    if not new_portfolio_id.strip():
+        error_msg = "Portfolio ID is required"
+    elif new_portfolio_id.strip() in st.session_state.portfolios:
+        error_msg = f"Portfolio ID '{new_portfolio_id.strip()}' already exists"
+    elif not new_portfolio_name.strip():
+        error_msg = "Portfolio Name is required"
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+    
+    st.markdown("---")
+    
+    # Action buttons with better spacing
+    col_btn1, col_btn2, col_spacer = st.columns([1, 1, 2])
+    
+    with col_btn1:
+        if st.button("📋 Create Copy", disabled=bool(error_msg), use_container_width=True, type="primary"):
+            # Use the proper copy_portfolio method
+            success = st.session_state.portfolio_manager.copy_portfolio(
+                portfolio_id,
+                new_portfolio_id.strip(),
+                new_portfolio_name.strip(),
+                new_portfolio_desc.strip()
+            )
+            
+            if success:
+                # Refresh portfolios and enter edit mode for the new copy
+                st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                st.session_state.current_page = 'portfolio'
+                # Use portfolio_switch_request to properly select the new portfolio
+                st.session_state.portfolio_switch_request = new_portfolio_id.strip()
+                st.session_state.edit_mode[new_portfolio_id.strip()] = True
+                st.session_state.portfolio_backup[new_portfolio_id.strip()] = copy.deepcopy(st.session_state.portfolios[new_portfolio_id.strip()])
+                # Update navigation state for unified navigation system
+                st.session_state.navigation['section'] = 'portfolios'
+                st.session_state.navigation['page'] = 'portfolio'
+                st.success(f"📋 Successfully created copy: {new_portfolio_id.strip()}")
+                st.rerun()
+            else:
+                st.error(f"❌ Failed to create copy of '{portfolio_id}'")
+                st.warning("💡 **Possible reasons:**")
+                st.markdown("- Source portfolio may not exist in database")
+                st.markdown("- Target portfolio ID already exists")
+                st.markdown("- Database connection issue")
+                st.info("💡 **Try:** Refresh portfolios or check application logs for details")
+    
+    with col_btn2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.rerun()
 
+@st.dialog("Add New Symbol")
+def add_symbol_dialog(portfolio_id: str):
+    """Modal dialog for adding a new symbol to the portfolio"""
+    st.markdown("**Add a new stock position to your portfolio**")
+    st.markdown("---")
+    
+    # Symbol input with validation
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        # Use validated symbol as value if available, otherwise empty
+        current_symbol = st.session_state.get('validated_symbol', '')
+        symbol_input = st.text_input(
+            "Stock Symbol:", 
+            value=current_symbol,
+            placeholder="e.g., 0001.HK, 0700.HK",
+            help="Enter Hong Kong stock symbol"
+        )
+    with col2:
+        if st.button("🔍 Check Symbol", use_container_width=True):
+            if symbol_input.strip():
+                trimmed_symbol = symbol_input.strip().upper()
+                
+                # Clear previous validation state
+                st.session_state['validation_success'] = False
+                
+                # Show loading message
+                with st.spinner(f"Looking up {trimmed_symbol} on Yahoo Finance..."):
+                    try:
+                        # Create ticker and fetch info
+                        stock = yf.Ticker(trimmed_symbol)
+                        info = stock.info
+                        
+                        # Enhanced validation and name retrieval
+                        if info and len(info) > 1:
+                            # Try multiple name fields for better reliability
+                            long_name = info.get('longName', '').strip()
+                            short_name = info.get('shortName', '').strip()
+                            display_name = info.get('displayName', '').strip()
+                            
+                            # Choose best available name
+                            if long_name and long_name != '':
+                                company_name = long_name
+                            elif short_name and short_name != '':
+                                company_name = short_name
+                            elif display_name and display_name != '':
+                                company_name = display_name
+                            else:
+                                # Fallback: use symbol-based name
+                                if trimmed_symbol.endswith('.HK'):
+                                    code = trimmed_symbol.replace('.HK', '')
+                                    company_name = f"HK Stock {code}"
+                                else:
+                                    company_name = 'Unknown Company'
+                            
+                            # Determine sector with expanded mapping
+                            raw_sector = info.get('sector', 'Other')
+                            if raw_sector in ["Technology", "Information Technology", "Communication Services"]:
+                                sector = "Tech"
+                            elif raw_sector in ["Financials", "Financial Services"]:
+                                sector = "Financials"
+                            elif raw_sector in ["Real Estate"]:
+                                sector = "REIT"
+                            elif raw_sector in ["Energy"]:
+                                sector = "Energy"
+                            elif raw_sector in ["Consumer Discretionary", "Consumer Staples"]:
+                                sector = "Consumer"
+                            elif raw_sector in ["Healthcare"]:
+                                sector = "Healthcare"
+                            else:
+                                sector = "Other"
+                            
+                            # Validate that we have meaningful data
+                            quote_type = info.get('quoteType', '')
+                            if quote_type == 'EQUITY' or info.get('symbol') == trimmed_symbol:
+                                # Store in session state for display
+                                st.session_state['validated_symbol'] = trimmed_symbol
+                                st.session_state['validated_company'] = company_name
+                                st.session_state['validated_sector'] = sector
+                                st.session_state['validation_success'] = True
+                                st.success(f"✅ Found: {company_name}")
+                                
+                                # Show additional info for debugging
+                                if quote_type:
+                                    st.info(f"Type: {quote_type} | Sector: {raw_sector}")
+                            else:
+                                st.session_state['validation_success'] = False
+                                st.error("❌ Symbol exists but may not be a valid equity")
+                                st.info(f"Quote type: {quote_type}, Raw data keys: {len(info)}")
+                        else:
+                            st.session_state['validation_success'] = False
+                            st.error("❌ Symbol not found on Yahoo Finance")
+                            st.info(f"Received data keys: {len(info) if info else 0}")
+                            
+                    except Exception as e:
+                        st.session_state['validation_success'] = False
+                        st.error(f"❌ Error validating symbol: {str(e)}")
+                        
+                        # Provide helpful troubleshooting info
+                        if "404" in str(e):
+                            st.info("💡 Make sure to use the correct format (e.g., 0700.HK)")
+                        elif "timeout" in str(e).lower():
+                            st.info("💡 Network timeout - please try again")
+                        else:
+                            st.info("💡 Check internet connection and try again")
+            else:
+                st.error("Please enter a symbol")
+    
+    # Display validated information
+    validated_symbol = st.session_state.get('validated_symbol', '')
+    validated_company = st.session_state.get('validated_company', '')
+    validated_sector = st.session_state.get('validated_sector', 'Other')
+    
+    # Show validated info if available
+    if validated_symbol:
+        st.success(f"**Validated Symbol**: {validated_symbol}")
+        st.info(f"**Company**: {validated_company}")
+        st.info(f"**Sector**: {validated_sector}")
+    
+    st.markdown("---")
+    
+    # Quantity and Cost inputs
+    col_qty, col_cost = st.columns(2)
+    with col_qty:
+        quantity = st.number_input(
+            "Quantity:",
+            min_value=0,
+            value=100,
+            step=1,
+            format="%d",
+            help="Number of shares (0 allowed for watchlist tracking)"
+        )
+    with col_cost:
+        avg_cost = st.number_input(
+            "Average Cost (HK$):",
+            min_value=0.0,
+            value=50.0,
+            step=0.01,
+            format="%.2f",
+            help="Average cost per share in HK$ (0 allowed for free shares)"
+        )
+    
+    # Validation
+    error_msg = ""
+    if not validated_symbol:
+        error_msg = "Please check the symbol first"
+    elif not isinstance(quantity, int) or quantity < 0:
+        error_msg = "Quantity must be a non-negative integer"
+    elif not isinstance(avg_cost, (int, float)) or avg_cost < 0:
+        error_msg = "Average cost must be a non-negative number"
+    else:
+        # Check for duplicate symbol in current portfolio
+        existing_symbols = [pos['symbol'] for pos in st.session_state.portfolios[portfolio_id]['positions']]
+        if validated_symbol in existing_symbols:
+            error_msg = f"Symbol {validated_symbol} already exists in this portfolio. You cannot add the same symbol twice."
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+        # Add helpful hint for duplicate symbol error
+        if "already exists in this portfolio" in error_msg:
+            st.info("💡 To modify an existing position, use the **Edit** button in the position table below.")
+    
+    st.markdown("---")
+    
+    # Action buttons
+    col_add, col_cancel, col_spacer = st.columns([1, 1, 2])
+    
+    with col_add:
+        if st.button("➕ Add Position", disabled=bool(error_msg), use_container_width=True, type="primary"):
+            # Add to session state pending changes
+            modified_key = f'modified_positions_{portfolio_id}'
+            if modified_key not in st.session_state:
+                st.session_state[modified_key] = {}
+            
+            # Add new position to modified positions
+            st.session_state[modified_key][validated_symbol] = {
+                'symbol': validated_symbol,
+                'company_name': validated_company,
+                'quantity': quantity,
+                'avg_cost': avg_cost,
+                'sector': validated_sector
+            }
+            
+            # Add to current portfolio for immediate display
+            # Note: Duplicate validation above ensures this symbol doesn't already exist
+            st.session_state.portfolios[portfolio_id]['positions'].append({
+                'symbol': validated_symbol,
+                'company_name': validated_company,
+                'quantity': quantity,
+                'avg_cost': avg_cost,
+                'sector': validated_sector
+            })
+            
+            # Clear validation session state
+            for key in ['validated_symbol', 'validated_company', 'validated_sector', 'validation_success']:
+                if key in st.session_state:
+                    del st.session_state[key]
+                    
+            st.success(f"✅ {validated_symbol} added to portfolio!")
+            st.rerun()
+    
+    with col_cancel:
+        if st.button("❌ Cancel", use_container_width=True):
+            # Clear validation session state
+            for key in ['validated_symbol', 'validated_company', 'validated_sector', 'validation_success']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
-
-
+@st.dialog("Update Position")
+def update_position_dialog(portfolio_id: str, position: dict):
+    """Modal dialog for updating an existing position"""
+    st.markdown(f"**Update Position: {position['symbol']}**")
+    st.markdown("---")
+    
+    # Display read-only position info
+    col_info1, col_info2 = st.columns(2)
+    with col_info1:
+        st.text_input("Symbol:", value=position['symbol'], disabled=True)
+        st.text_input("Company:", value=position['company_name'], disabled=True)
+    with col_info2:
+        st.text_input("Sector:", value=position.get('sector', 'Other'), disabled=True)
+    
+    st.markdown("---")
+    st.markdown("**Update the following information:**")
+    
+    # Editable fields
+    col_qty, col_cost = st.columns(2)
+    with col_qty:
+        new_quantity = st.number_input(
+            "Quantity:",
+            min_value=0,
+            value=position['quantity'],
+            step=1,
+            format="%d",
+            help="Number of shares (0 to remove position)"
+        )
+    with col_cost:
+        new_avg_cost = st.number_input(
+            "Average Cost (HK$):",
+            min_value=0.0,
+            value=position['avg_cost'],
+            step=0.01,
+            format="%.2f",
+            help="Average cost per share in HK$ (0 allowed for free shares)"
+        )
+    
+    # Validation
+    error_msg = ""
+    if not isinstance(new_quantity, int) or new_quantity < 0:
+        error_msg = "Quantity must be a non-negative integer"
+    elif not isinstance(new_avg_cost, (int, float)) or new_avg_cost < 0:
+        error_msg = "Average cost must be a non-negative number"
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+    
+    st.markdown("---")
+    
+    # Action buttons
+    col_update, col_cancel, col_spacer = st.columns([1, 1, 2])
+    
+    with col_update:
+        if st.button("💾 Update", disabled=bool(error_msg), use_container_width=True, type="primary"):
+            # Update in session state
+            modified_key = f'modified_positions_{portfolio_id}'
+            deleted_key = f'deleted_positions_{portfolio_id}'
+            
+            if modified_key not in st.session_state:
+                st.session_state[modified_key] = {}
+            if deleted_key not in st.session_state:
+                st.session_state[deleted_key] = set()
+            
+            if new_quantity == 0:
+                # Mark for deletion
+                st.session_state[deleted_key].add(position['symbol'])
+                # Remove from modified if it was there
+                if position['symbol'] in st.session_state[modified_key]:
+                    del st.session_state[modified_key][position['symbol']]
+            else:
+                # Update position
+                st.session_state[modified_key][position['symbol']] = {
+                    'symbol': position['symbol'],
+                    'company_name': position['company_name'],
+                    'quantity': new_quantity,
+                    'avg_cost': new_avg_cost,
+                    'sector': position.get('sector', 'Other')
+                }
+                # Remove from deleted if it was there
+                if position['symbol'] in st.session_state[deleted_key]:
+                    st.session_state[deleted_key].remove(position['symbol'])
+            
+            # Update display data immediately
+            for i, pos in enumerate(st.session_state.portfolios[portfolio_id]['positions']):
+                if pos['symbol'] == position['symbol']:
+                    if new_quantity == 0:
+                        # Don't remove from display, just mark as deleted for visual indication
+                        pass
+                    else:
+                        st.session_state.portfolios[portfolio_id]['positions'][i] = {
+                            'symbol': position['symbol'],
+                            'company_name': position['company_name'],
+                            'quantity': new_quantity,
+                            'avg_cost': new_avg_cost,
+                            'sector': position.get('sector', 'Other')
+                        }
+                    break
+            
+            action = "marked for deletion" if new_quantity == 0 else "updated"
+            st.success(f"✅ {position['symbol']} {action}!")
+            st.rerun()
+    
+    with col_cancel:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.rerun()
 
 st.set_page_config(
     page_title="HK Strategy Multi-Portfolio Dashboard",
@@ -92,8 +533,212 @@ st.set_page_config(
     layout="wide"
 )
 
+@st.dialog("Create New Portfolio")
+def create_portfolio_dialog():
+    """Modal dialog for creating a new portfolio"""
+    st.markdown("**Create a new portfolio to track your investments**")
+    st.markdown("---")
+    
+    # Form fields
+    new_portfolio_id = st.text_input(
+        "Portfolio ID:",
+        placeholder="e.g., TECH_GROWTH",
+        key="new_portfolio_id_modal",
+        help="Unique identifier for the portfolio (no spaces, use underscores)"
+    )
+    new_portfolio_name = st.text_input(
+        "Portfolio Name:",
+        placeholder="e.g., Technology Growth Stocks",
+        key="new_portfolio_name_modal",
+        help="Display name for the portfolio"
+    )
+    new_portfolio_desc = st.text_area(
+        "Description:",
+        placeholder="Brief description of the portfolio strategy...",
+        key="new_portfolio_desc_modal",
+        help="Optional description of the portfolio"
+    )
+    
+    st.markdown("---")
+    
+    # Validation
+    error_msg = ""
+    if new_portfolio_id:
+        portfolio_id = new_portfolio_id.strip().upper().replace(' ', '_')
+        if portfolio_id in st.session_state.portfolios:
+            error_msg = f"Portfolio '{portfolio_id}' already exists!"
+        elif not new_portfolio_name.strip():
+            error_msg = "Portfolio Name is required"
+    elif new_portfolio_name:
+        error_msg = "Portfolio ID is required"
+    
+    if error_msg:
+        st.error(f"❌ {error_msg}")
+    
+    # Buttons
+    col_create, col_cancel = st.columns(2)
+    with col_create:
+        disabled = bool(error_msg) or not new_portfolio_id or not new_portfolio_name
+        if st.button("✅ Create Portfolio", use_container_width=True, disabled=disabled):
+            portfolio_id = new_portfolio_id.strip().upper().replace(' ', '_')
+            
+            # Create new portfolio in database using portfolio manager
+            success = st.session_state.portfolio_manager.create_portfolio(
+                portfolio_id,
+                new_portfolio_name.strip(),
+                new_portfolio_desc.strip()
+            )
+            
+            if success:
+                # Refresh portfolios from database to ensure consistency
+                st.session_state.portfolios = st.session_state.portfolio_manager.get_all_portfolios()
+                st.success(f"✅ Portfolio '{new_portfolio_name}' created successfully and saved to database!")
+                
+                # Clear form fields
+                for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                
+                # Brief delay to show success message
+                import time
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(f"❌ Failed to create portfolio '{new_portfolio_name}' in database!")
+                st.warning("💡 **Possible reasons:**")
+                st.markdown("- Portfolio ID already exists in database")
+                st.markdown("- Database connection issue")
+                st.info("💡 **Try:** Use a different Portfolio ID or check database connection")
+    
+    with col_cancel:
+        if st.button("❌ Cancel", use_container_width=True):
+            # Clear form fields on cancel
+            for key in ['new_portfolio_id_modal', 'new_portfolio_name_modal', 'new_portfolio_desc_modal']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
+@st.dialog("Total Positions Details")
+def show_total_positions_dialog(symbol_details):
+    """Modal dialog showing all unique symbols across portfolios"""
+    st.markdown("**All unique symbols across your portfolios**")
+    st.markdown("---")
+    
+    if not symbol_details:
+        st.info("No symbols found in any portfolio.")
+        if st.button("🔙 Back", use_container_width=True):
+            st.rerun()
+        return
+    
+    # Create a sorted list for display
+    symbols_list = []
+    for symbol, details in symbol_details.items():
+        symbols_list.append({
+            "Symbol": symbol,
+            "Company Name": details.get('company_name', 'Unknown'),
+            "Sector": details.get('sector', 'Other')
+        })
+    
+    # Sort by symbol
+    symbols_list.sort(key=lambda x: x['Symbol'])
+    
+    # Display summary
+    st.info(f"📊 **Total Unique Symbols:** {len(symbols_list)}")
+    
+    # Display table
+    st.markdown("### 📋 Symbol Details")
+    
+    # Create table header
+    header_cols = st.columns([1, 2.5, 1.5])
+    with header_cols[0]:
+        st.markdown("**Symbol**")
+    with header_cols[1]:
+        st.markdown("**Company Name**")
+    with header_cols[2]:
+        st.markdown("**Sector**")
+    
+    st.markdown("---")
+    
+    # Display rows
+    for symbol_data in symbols_list:
+        row_cols = st.columns([1, 2.5, 1.5])
+        with row_cols[0]:
+            st.write(symbol_data["Symbol"])
+        with row_cols[1]:
+            # Truncate long company names
+            company_name = symbol_data["Company Name"]
+            if len(company_name) > 35:
+                company_name = company_name[:32] + "..."
+            st.write(company_name)
+        with row_cols[2]:
+            st.write(symbol_data["Sector"])
+    
+    st.markdown("---")
+    
+    # Back button
+    if st.button("🔙 Back", use_container_width=True):
+        st.rerun()
 
+@st.dialog("Active Positions Details")
+def show_active_positions_dialog(active_symbol_details):
+    """Modal dialog showing only active symbols (quantity > 0)"""
+    st.markdown("**Active symbols with holdings > 0**")
+    st.markdown("---")
+    
+    if not active_symbol_details:
+        st.info("No active positions found.")
+        if st.button("🔙 Back", use_container_width=True):
+            st.rerun()
+        return
+    
+    # Create a sorted list for display
+    active_symbols_list = []
+    for symbol, details in active_symbol_details.items():
+        active_symbols_list.append({
+            "Symbol": symbol,
+            "Company Name": details.get('company_name', 'Unknown'),
+            "Sector": details.get('sector', 'Other')
+        })
+    
+    # Sort by symbol
+    active_symbols_list.sort(key=lambda x: x['Symbol'])
+    
+    # Display summary
+    st.info(f"📊 **Active Positions:** {len(active_symbols_list)}")
+    
+    # Display table
+    st.markdown("### 📋 Active Symbol Details")
+    
+    # Create table header
+    header_cols = st.columns([1, 2.5, 1.5])
+    with header_cols[0]:
+        st.markdown("**Symbol**")
+    with header_cols[1]:
+        st.markdown("**Company Name**")
+    with header_cols[2]:
+        st.markdown("**Sector**")
+    
+    st.markdown("---")
+    
+    # Display rows
+    for symbol_data in active_symbols_list:
+        row_cols = st.columns([1, 2.5, 1.5])
+        with row_cols[0]:
+            st.write(symbol_data["Symbol"])
+        with row_cols[1]:
+            # Truncate long company names
+            company_name = symbol_data["Company Name"]
+            if len(company_name) > 35:
+                company_name = company_name[:32] + "..."
+            st.write(company_name)
+        with row_cols[2]:
+            st.write(symbol_data["Sector"])
+    
+    st.markdown("---")
+    
+    # Back button
+    if st.button("🔙 Back", use_container_width=True):
+        st.rerun()
 
 # Helper function for safe percentage calculations
 def _safe_percentage(numerator, denominator):
@@ -175,21 +820,1328 @@ if 'selected_portfolio_for_pv' not in st.session_state:
 if 'current_analysis' not in st.session_state:
     st.session_state.current_analysis = None
 
+def fetch_hk_price(hk_symbol):
+    """Fetch current price for Hong Kong stock"""
+    try:
+        stock = yf.Ticker(hk_symbol)
+        hist = stock.history(period="2d")
+        if not hist.empty:
+            price = float(hist['Close'].iloc[-1])
+            return price, f"✅ {hk_symbol}: HK${price:.2f} (from history)"
+        
+        info = stock.info
+        current_price = info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose')))
+        if current_price and current_price > 0:
+            price = float(current_price)
+            return price, f"📈 {hk_symbol}: HK${price:.2f} (from info)"
+            
+        fallback_price = 75.0
+        return fallback_price, f"⚠️ {hk_symbol}: Using fallback price HK${fallback_price:.2f}"
+        
+    except Exception as e:
+        recent_prices = {
+            "0005.HK": 100.10, "0316.HK": 140.50, "0388.HK": 447.60, "0700.HK": 599.00,
+            "0823.HK": 41.26, "0857.HK": 7.39, "0939.HK": 7.49, "1810.HK": 53.20,
+            "2888.HK": 144.50, "3690.HK": 116.30, "9618.HK": 121.30, "9988.HK": 121.50
+        }
+        price = recent_prices.get(hk_symbol, 75.0)
+        return price, f"❌ {hk_symbol}: Error - using cached price HK${price:.2f}"
 
+def fetch_hk_historical_prices(hk_symbol):
+    """Fetch current and previous day prices for Hong Kong stock"""
+    try:
+        stock = yf.Ticker(hk_symbol)
+        hist = stock.history(period="5d")  # Get 5 days to ensure we have previous trading day
+        if not hist.empty and len(hist) >= 2:
+            current_price = float(hist['Close'].iloc[-1])
+            previous_price = float(hist['Close'].iloc[-2])
+            return current_price, previous_price, f"✅ {hk_symbol}: Current HK${current_price:.2f}, Previous HK${previous_price:.2f}"
+        elif not hist.empty and len(hist) == 1:
+            # Only one day available, use it for both
+            price = float(hist['Close'].iloc[-1])
+            return price, price, f"⚠️ {hk_symbol}: Only one day available HK${price:.2f}"
+        else:
+            # No historical data, fall back to info
+            info = stock.info
+            current_price = info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose')))
+            if current_price and current_price > 0:
+                price = float(current_price)
+                # Estimate previous price as 99% of current (small realistic change)
+                prev_price = price * 0.99
+                return price, prev_price, f"📈 {hk_symbol}: Current HK${price:.2f}, Estimated Prev HK${prev_price:.2f}"
+            else:
+                # Use fallback prices
+                fallback_price = 75.0
+                prev_fallback = fallback_price * 0.99
+                return fallback_price, prev_fallback, f"⚠️ {hk_symbol}: Using fallback prices"
+        
+    except Exception as e:
+        recent_prices = {
+            "0005.HK": 100.10, "0316.HK": 140.50, "0388.HK": 447.60, "0700.HK": 599.00,
+            "0823.HK": 41.26, "0857.HK": 7.39, "0939.HK": 7.49, "1810.HK": 53.20,
+            "2888.HK": 144.50, "3690.HK": 116.30, "9618.HK": 121.30, "9988.HK": 121.50
+        }
+        current_price = recent_prices.get(hk_symbol, 75.0)
+        previous_price = current_price * 0.99  # Small realistic change
+        return current_price, previous_price, f"❌ {hk_symbol}: Error - using cached prices"
 
+def get_company_name(symbol):
+    """Try to fetch company name from Yahoo Finance"""
+    try:
+        stock = yf.Ticker(symbol)
+        info = stock.info
+        return info.get('longName', info.get('shortName', 'Unknown Company'))
+    except:
+        return 'Unknown Company'
 
+@st.cache_data
+def get_all_portfolios_for_equity_analysis():
+    """Get all available portfolios for equity analysis selection"""
+    try:
+        portfolios = []
+        if 'portfolios' in st.session_state and st.session_state.portfolios:
+            for portfolio_id, portfolio_data in st.session_state.portfolios.items():
+                portfolios.append({
+                    'portfolio_id': portfolio_id,
+                    'name': portfolio_data.get('name', portfolio_id) if isinstance(portfolio_data, dict) else portfolio_id
+                })
+        
+        # Add "All Portfolio Overview" option
+        portfolios.insert(0, {
+            'portfolio_id': 'all_overview',
+            'name': 'All Portfolio Overview'
+        })
+        
+        return portfolios
+    except Exception as e:
+        st.error(f"Error loading portfolios: {e}")
+        return [{
+            'portfolio_id': 'all_overview',
+            'name': 'All Portfolio Overview'
+        }]
 
+@st.cache_data
+def get_portfolio_analyses_for_equity(portfolio_id: str):
+    """Get all portfolio analyses for a specific portfolio"""
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT id, name, start_date, end_date
+            FROM portfolio_analyses
+            WHERE name ILIKE %s
+            ORDER BY created_at DESC
+        """, (f"%{portfolio_id}%",))
+        
+        results = cur.fetchall()
+        conn.close()
+        
+        return [{'id': r[0], 'name': r[1], 'start_date': r[2], 'end_date': r[3]} for r in results]
+    except:
+        return []
 
+def get_equities_from_portfolio(portfolio_id: str):
+    """Get all equities/symbols from a specific portfolio (both active and inactive positions)"""
+    try:
+        # Validate that portfolio data exists in session state
+        if 'portfolios' not in st.session_state or not st.session_state.portfolios:
+            if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                st.warning("⚠️ Debug: No portfolio data found in session state")
+            return []
+        
+        if portfolio_id == 'all_overview':
+            # For "All Portfolio Overview", get all unique equities from all portfolios
+            all_equities = []
+            for pid, portfolio_data in st.session_state.portfolios.items():
+                if 'positions' in portfolio_data and portfolio_data['positions']:
+                    for position in portfolio_data['positions']:
+                        equity = {
+                            'symbol': position['symbol'],
+                            'company_name': position.get('company_name', 'Unknown Company')
+                        }
+                        # Avoid duplicates by checking if equity already exists
+                        if not any(e['symbol'] == equity['symbol'] for e in all_equities):
+                            all_equities.append(equity)
+            
+            # Debug output
+            if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                st.info(f"🔍 Debug: Found {len(all_equities)} unique equities across all portfolios")
+            
+            return all_equities
+            
+        elif portfolio_id in st.session_state.portfolios:
+            # Get positions from the specific portfolio
+            portfolio_data = st.session_state.portfolios[portfolio_id]
+            if 'positions' in portfolio_data and portfolio_data['positions']:
+                equities = []
+                active_count = 0
+                inactive_count = 0
+                
+                for position in portfolio_data['positions']:
+                    equity = {
+                        'symbol': position['symbol'],
+                        'company_name': position.get('company_name', 'Unknown Company')
+                    }
+                    equities.append(equity)
+                    
+                    # Count active vs inactive for debug
+                    if position.get('quantity', 0) > 0:
+                        active_count += 1
+                    else:
+                        inactive_count += 1
+                
+                # Debug output
+                if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                    st.info(f"🔍 Debug: Portfolio {portfolio_id} has {len(equities)} total equities ({active_count} active, {inactive_count} inactive)")
+                
+                return equities
+            else:
+                # Portfolio exists but has no positions
+                if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                    st.info(f"🔍 Debug: Portfolio {portfolio_id} exists but has no positions")
+                return []
+        else:
+            # Portfolio ID not found
+            if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+                st.warning(f"⚠️ Debug: Portfolio {portfolio_id} not found in session state")
+            return []
+            
+    except Exception as e:
+        st.error(f"❌ Error loading equities for portfolio {portfolio_id}: {str(e)}")
+        if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+            st.error(f"🔍 Debug: Exception details: {type(e).__name__}: {e}")
+        return []
 
+def convert_for_database(value):
+    """Convert NumPy/pandas values to database-compatible Python types"""
+    import numpy as np
+    import pandas as pd
+    
+    try:
+        # Handle None values first
+        if value is None:
+            return None
+        
+        # Handle pandas Timestamp early (before numeric checks)
+        if isinstance(value, pd.Timestamp):
+            return value.date()
+        
+        # Handle Python native date/datetime objects
+        if hasattr(value, 'date') and callable(getattr(value, 'date')):
+            if hasattr(value, 'time'):  # datetime object
+                return value.date()
+            else:  # date object
+                return value
+        
+        # Handle string types early
+        # Handle NumPy 2.0 compatibility (np.unicode_ was removed)
+        string_types = [str, np.str_]
+        try:
+            string_types.append(np.unicode_)  # For NumPy < 2.0
+        except AttributeError:
+            pass  # NumPy 2.0+ doesn't have np.unicode_
+        
+        if isinstance(value, tuple(string_types)):
+            return str(value)
+        
+        # Handle boolean types (before numeric checks to avoid conversion issues)
+        # Handle NumPy 2.0 compatibility (np.bool8 was removed)
+        bool_types = [bool, np.bool_]
+        try:
+            bool_types.append(np.bool8)  # For NumPy < 2.0
+        except AttributeError:
+            pass  # NumPy 2.0+ doesn't have np.bool8
+        
+        if isinstance(value, tuple(bool_types)):
+            return bool(value)
+        
+        # Now handle numeric types with proper validation
+        # Check for NaN only on numeric-like values
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            # pd.isna() failed, value is likely not numeric-compatible
+            pass
+        
+        # Check for infinity only on float types that support it
+        try:
+            # Only check infinity for float types (int cannot be infinite)
+            if isinstance(value, (float, np.floating)) and np.isinf(value):
+                return None
+        except (TypeError, ValueError):
+            # np.isinf() failed, continue with other conversions
+            pass
+        
+        # Convert NumPy numeric types to Python native types
+        if isinstance(value, (np.integer, np.signedinteger, np.unsignedinteger)):
+            return int(value)
+        elif isinstance(value, (np.floating, np.float64, np.float32, np.float16)):
+            # Convert to Python float first
+            python_float = float(value)
+            # Check if this float is actually a whole number (for BIGINT compatibility)
+            if python_float.is_integer():
+                return int(python_float)
+            return python_float
+        
+        # Handle Python native numeric types
+        if isinstance(value, (int, float)):
+            # Check if float values are whole numbers (for BIGINT compatibility)
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            return value
+        
+        # Handle complex numbers (convert to None as database can't store them)
+        if isinstance(value, (complex, np.complex64, np.complex128)):
+            return None
+        
+        # Handle array-like objects by taking first element or converting to string
+        if hasattr(value, '__iter__') and not isinstance(value, str):
+            try:
+                # If it's a single-element array/series, extract the value
+                if hasattr(value, '__len__') and len(value) == 1:
+                    return convert_for_database(value[0])
+                elif hasattr(value, '__len__') and len(value) == 0:
+                    return None
+                else:
+                    # Multi-element array, convert to string representation
+                    return str(value)
+            except:
+                return str(value)
+        
+        # Fallback: return as-is for unhandled Python native types
+        return value
+        
+    except Exception as e:
+        # Enhanced error handling for conversion failures
+        try:
+            import streamlit as st
+            if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                st.error(f"🔍 Debug: Conversion failed for value: {repr(value)} (type: {type(value)})")
+                st.error(f"🔍 Debug: Conversion error: {str(e)}")
+        except:
+            # If streamlit debug fails, ignore and continue
+            pass
+        
+        # Fallback to string conversion or None
+        try:
+            return str(value)
+        except:
+            return None
 
+@st.cache_data
+def fetch_and_store_yahoo_data(symbol: str, start_date: str, end_date: str):
+    """Fetch data from Yahoo Finance and store in database if missing"""
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        import pandas as pd
+        import numpy as np
+        
+        # Check existing data coverage in database
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT MIN(trade_date), MAX(trade_date), COUNT(*)
+                FROM daily_equity_technicals
+                WHERE symbol = %s
+                  AND trade_date >= %s
+                  AND trade_date <= %s
+            """, (symbol, start_date, end_date))
+            
+            result = cur.fetchone()
+            existing_start, existing_end, count = result
+            
+            # Convert dates to datetime objects
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            
+            # Calculate expected trading days (rough estimate)
+            expected_days = (end_dt - start_dt).days
+            data_coverage = count / max(expected_days * 0.7, 1)  # Assume ~70% are trading days
+            
+            needs_fetching = False
+            if count == 0 or data_coverage < 0.8:  # Less than 80% coverage
+                needs_fetching = True
+            elif existing_start is None or existing_end is None:
+                needs_fetching = True
+            elif existing_start > start_dt.date() or existing_end < end_dt.date():
+                needs_fetching = True
+            
+            if needs_fetching:
+                # Fetch data from Yahoo Finance
+                st.info(f"📊 Fetching data for {symbol} from Yahoo Finance...")
+                
+                ticker = yf.Ticker(symbol)
+                hist_data = ticker.history(start=start_dt, end=end_dt + timedelta(days=1))
+                
+                if not hist_data.empty:
+                    # Calculate technical indicators
+                    hist_data['rsi_14'] = calculate_rsi(hist_data['Close'], 14)
+                    hist_data['sma_20'] = hist_data['Close'].rolling(window=20).mean()
+                    hist_data['ema_12'] = hist_data['Close'].ewm(span=12).mean()
+                    hist_data['ema_26'] = hist_data['Close'].ewm(span=26).mean()
+                    
+                    # Calculate MACD
+                    hist_data['macd'] = hist_data['ema_12'] - hist_data['ema_26']
+                    hist_data['macd_signal'] = hist_data['macd'].ewm(span=9).mean()
+                    
+                    # Calculate Bollinger Bands
+                    bb_period = 20
+                    bb_std = 2
+                    sma = hist_data['Close'].rolling(window=bb_period).mean()
+                    std = hist_data['Close'].rolling(window=bb_period).std()
+                    hist_data['bollinger_upper'] = sma + (std * bb_std)
+                    hist_data['bollinger_middle'] = sma  # Middle band is the 20-day SMA
+                    hist_data['bollinger_lower'] = sma - (std * bb_std)
+                    
+                    # Volume SMA
+                    hist_data['volume_sma_20'] = hist_data['Volume'].rolling(window=20).mean()
+                    
+                    # Insert/update data in database
+                    for date, row in hist_data.iterrows():
+                        cur.execute("""
+                            INSERT INTO daily_equity_technicals (
+                                symbol, trade_date, open_price, close_price, high_price, low_price, volume,
+                                rsi_14, macd, macd_signal, bollinger_upper, bollinger_middle, bollinger_lower, 
+                                sma_20, ema_12, ema_26, volume_sma_20
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (symbol, trade_date) 
+                            DO UPDATE SET
+                                open_price = EXCLUDED.open_price,
+                                close_price = EXCLUDED.close_price,
+                                high_price = EXCLUDED.high_price,
+                                low_price = EXCLUDED.low_price,
+                                volume = EXCLUDED.volume,
+                                rsi_14 = EXCLUDED.rsi_14,
+                                macd = EXCLUDED.macd,
+                                macd_signal = EXCLUDED.macd_signal,
+                                bollinger_upper = EXCLUDED.bollinger_upper,
+                                bollinger_middle = EXCLUDED.bollinger_middle,
+                                bollinger_lower = EXCLUDED.bollinger_lower,
+                                sma_20 = EXCLUDED.sma_20,
+                                ema_12 = EXCLUDED.ema_12,
+                                ema_26 = EXCLUDED.ema_26,
+                                volume_sma_20 = EXCLUDED.volume_sma_20
+                        """, (
+                            symbol, 
+                            convert_for_database(date.date()), 
+                            convert_for_database(row['Open']), 
+                            convert_for_database(row['Close']), 
+                            convert_for_database(row['High']), 
+                            convert_for_database(row['Low']), 
+                            convert_for_database(row['Volume']),
+                            convert_for_database(row.get('rsi_14')), 
+                            convert_for_database(row.get('macd')), 
+                            convert_for_database(row.get('macd_signal')),
+                            convert_for_database(row.get('bollinger_upper')), 
+                            convert_for_database(row.get('bollinger_middle')),
+                            convert_for_database(row.get('bollinger_lower')),
+                            convert_for_database(row.get('sma_20')), 
+                            convert_for_database(row.get('ema_12')), 
+                            convert_for_database(row.get('ema_26')), 
+                            convert_for_database(row.get('volume_sma_20'))
+                        ))
+                    
+                    conn.commit()
+                    st.success(f"✅ Successfully fetched and stored {len(hist_data)} days of data for {symbol}")
+                    return True
+                else:
+                    st.warning(f"⚠️ No data available for {symbol} in Yahoo Finance")
+                    return False
+            else:
+                st.info(f"✅ Data for {symbol} already available in database")
+                return True
+                
+    except Exception as e:
+        # Enhanced error handling with specific error types
+        error_msg = str(e)
+        
+        if "np." in error_msg or "numpy" in error_msg.lower():
+            st.error(f"❌ Data type conversion error for {symbol}: NumPy types detected in database insertion")
+            st.error("🔧 This suggests a data conversion issue. Please enable Debug Mode for more details.")
+        elif "does not exist" in error_msg and "schema" in error_msg:
+            st.error(f"❌ Database schema error for {symbol}: {error_msg}")
+            st.error("🔧 This suggests improper data types being passed to PostgreSQL")
+        else:
+            st.error(f"❌ Error fetching data for {symbol}: {error_msg}")
+        
+        # Debug information
+        if 'debug_mode' in st.session_state and st.session_state.debug_mode:
+            st.error(f"🔍 Debug: Full exception details:")
+            st.error(f"Exception type: {type(e).__name__}")
+            st.error(f"Exception message: {error_msg}")
+            
+            # Try to show some sample data types if available
+            try:
+                import yfinance as yf
+                from datetime import datetime, timedelta
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                ticker = yf.Ticker(symbol)
+                sample_data = ticker.history(start=start_dt, end=end_dt, period="5d")
+                
+                if not sample_data.empty:
+                    row = sample_data.iloc[0]
+                    st.error("🔍 Debug: Sample data types:")
+                    for col in ['Open', 'Close', 'High', 'Low', 'Volume']:
+                        if col in row:
+                            st.error(f"  {col}: {type(row[col])} = {row[col]}")
+            except:
+                pass
+        
+        return False
 
+def calculate_rsi(prices, window=14):
+    """Calculate RSI indicator with enhanced error handling"""
+    try:
+        import numpy as np
+        
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        
+        # Handle division by zero more carefully
+        # Replace zero losses with a small value to avoid infinite RS values
+        loss = loss.replace(0, np.nan)
+        rs = gain / loss
+        
+        # Handle infinite and NaN values before final calculation
+        rs = rs.replace([np.inf, -np.inf], np.nan)
+        
+        # Calculate RSI, handling NaN values
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Clean up any remaining problematic values
+        rsi = rsi.replace([np.inf, -np.inf], np.nan)
+        
+        return rsi
+        
+    except Exception as e:
+        # Enhanced error reporting
+        try:
+            import streamlit as st
+            if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                st.error(f"🔍 Debug RSI Error: {str(e)}")
+                st.error(f"🔍 Debug RSI Prices Shape: {prices.shape if hasattr(prices, 'shape') else 'No shape'}")
+                st.error(f"🔍 Debug RSI Prices Type: {type(prices)}")
+        except:
+            pass
+        return None
 
+def calculate_rsi_realtime(prices, period=14):
+    """Calculate RSI with configurable period for real-time use"""
+    try:
+        delta = prices.diff()
+        gain = delta.clip(lower=0)  # Positive price changes
+        loss = -delta.clip(upper=0)  # Negative price changes (made positive)
+        avg_gain = gain.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs))
+        return rsi.fillna(50)
+    except Exception as e:
+        return pd.Series([50] * len(prices), index=prices.index)
 
+def calculate_macd_realtime(prices, fast=12, slow=26, signal=9):
+    """Calculate MACD with configurable parameters for real-time use"""
+    try:
+        ema_fast = prices.ewm(span=fast, adjust=False, min_periods=fast).mean()
+        ema_slow = prices.ewm(span=slow, adjust=False, min_periods=slow).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False, min_periods=signal).mean()
+        histogram = macd_line - signal_line
+        return macd_line, signal_line, histogram
+    except Exception as e:
+        # Return zeros if calculation fails
+        zeros = pd.Series([0] * len(prices), index=prices.index)
+        return zeros, zeros, zeros
 
+def calculate_ema_realtime(prices, period):
+    """Calculate EMA with configurable period for real-time use"""
+    try:
+        ema = prices.ewm(span=period, adjust=False, min_periods=period).mean()
+        return ema
+    except Exception as e:
+        # Return original prices if calculation fails
+        return prices
 
+@st.cache_data
+def get_analysis_period_for_equity(analysis_id: int):
+    """Get the analysis period (start_date, end_date) for a specific analysis"""
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT start_date, end_date, name
+            FROM portfolio_analyses
+            WHERE id = %s
+        """, (analysis_id,))
+        
+        result = cur.fetchone()
+        conn.close()
+        
+        if result:
+            return {'start_date': result[0], 'end_date': result[1], 'name': result[2]}
+        return None
+    except:
+        return None
 
+@st.cache_data
+def fetch_technical_analysis_data(symbol: str):
+    """Fetch technical analysis data from daily_equity_technicals table"""
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        # Get latest technical data for this symbol
+        cur.execute("""
+            SELECT 
+                high_price as day_high,
+                low_price as day_low,
+                week_52_high,
+                week_52_low,
+                rsi_14,
+                ema_12,
+                ema_26,
+                sma_20,
+                macd,
+                volume_ratio,
+                atr_14,
+                support_level,
+                close_price,
+                trade_date,
+                bollinger_upper,
+                bollinger_middle,
+                bollinger_lower
+            FROM daily_equity_technicals 
+            WHERE symbol = %s 
+            ORDER BY trade_date DESC 
+            LIMIT 1
+        """, (symbol,))
+        
+        result = cur.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                'day_high': result[0],
+                'day_low': result[1],
+                'week_52_high': result[2],
+                'week_52_low': result[3],
+                'rsi_14': result[4],
+                'ema_12': result[5],
+                'ema_26': result[6],
+                'sma_20': result[7],
+                'macd': result[8],
+                'volume_ratio': result[9],
+                'atr_14': result[10],
+                'support_level': result[11],
+                'close_price': result[12],
+                'trade_date': result[13],
+                'bollinger_upper': result[14],
+                'bollinger_middle': result[15],
+                'bollinger_lower': result[16]
+            }
+        else:
+            # Return fallback data if no technical data found
+            return get_fallback_technical_data(symbol)
+            
+    except Exception as e:
+        st.error(f"Error fetching technical data: {e}")
+        return get_fallback_technical_data(symbol)
 
+def get_fallback_technical_data(symbol: str):
+    """Provide fallback technical data when database data is unavailable"""
+    # Try to fetch some basic price data from Yahoo Finance
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1y")
+        
+        if not hist.empty:
+            current_price = hist['Close'].iloc[-1]
+            day_high = hist['High'].iloc[-1]
+            day_low = hist['Low'].iloc[-1]
+            week_52_high = hist['High'].max()
+            week_52_low = hist['Low'].min()
+            
+            # Calculate simple RSI approximation
+            delta = hist['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            current_rsi = rsi.iloc[-1] if not rsi.empty else 50.0
+            
+            # Calculate Bollinger Bands
+            sma_20 = hist['Close'].rolling(20).mean().iloc[-1]
+            std_20 = hist['Close'].rolling(20).std().iloc[-1]
+            bollinger_upper = sma_20 + (2 * std_20)
+            bollinger_middle = sma_20
+            bollinger_lower = sma_20 - (2 * std_20)
+            
+            return {
+                'day_high': day_high,
+                'day_low': day_low,
+                'week_52_high': week_52_high,
+                'week_52_low': week_52_low,
+                'rsi_14': current_rsi,
+                'ema_12': current_price * 1.01,  # Approximation
+                'ema_26': current_price * 0.99,  # Approximation
+                'sma_20': sma_20,
+                'macd': 0.5,  # Placeholder
+                'volume_ratio': 1.0,  # Placeholder
+                'atr_14': (day_high - day_low),
+                'support_level': week_52_low * 1.05,
+                'close_price': current_price,
+                'trade_date': hist.index[-1].date(),
+                'bollinger_upper': bollinger_upper,
+                'bollinger_middle': bollinger_middle,
+                'bollinger_lower': bollinger_lower
+            }
+    except:
+        pass
+    
+    # Final fallback with placeholder data
+    return {
+        'day_high': 325.50,
+        'day_low': 318.20,
+        'week_52_high': 385.00,
+        'week_52_low': 245.80,
+        'rsi_14': 65.2,
+        'ema_12': 321.45,
+        'ema_26': 315.80,
+        'sma_20': 319.60,
+        'macd': 2.45,
+        'volume_ratio': 1.35,
+        'atr_14': 8.45,
+        'support_level': 310.00,
+        'close_price': 320.00,
+        'trade_date': None,
+        'bollinger_upper': 335.20,
+        'bollinger_middle': 319.60,
+        'bollinger_lower': 304.00
+    }
 
+@st.cache_data
+def fetch_equity_prices_by_date(symbol: str, target_date):
+    """
+    Fetch OHLCV data for a specific symbol and date from daily_equity_technicals table
+    
+    Args:
+        symbol: Stock symbol (e.g., '0700.HK')
+        target_date: Target date (date object or string)
+        
+    Returns:
+        Dict with open_price, close_price, high_price, low_price, volume, trade_date, data_source
+    """
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        # Convert date to string if needed
+        if hasattr(target_date, 'strftime'):
+            date_str = target_date.strftime('%Y-%m-%d')
+        else:
+            date_str = str(target_date)
+        
+        # First try: exact date match
+        cur.execute("""
+            SELECT open_price, close_price, high_price, low_price, volume, trade_date
+            FROM daily_equity_technicals 
+            WHERE symbol = %s AND trade_date = %s
+        """, (symbol, date_str))
+        
+        result = cur.fetchone()
+        
+        if result:
+            return {
+                'open_price': float(result[0]) if result[0] else None,
+                'close_price': float(result[1]) if result[1] else None,
+                'high_price': float(result[2]) if result[2] else None,
+                'low_price': float(result[3]) if result[3] else None,
+                'volume': int(result[4]) if result[4] else None,
+                'trade_date': result[5],
+                'data_source': 'database_exact'
+            }
+        
+        # Second try: nearest date (within 7 days)
+        cur.execute("""
+            SELECT open_price, close_price, high_price, low_price, volume, trade_date
+            FROM daily_equity_technicals 
+            WHERE symbol = %s 
+            AND ABS(trade_date - %s::date) <= 7
+            ORDER BY ABS(trade_date - %s::date)
+            LIMIT 1
+        """, (symbol, date_str, date_str))
+        
+        result = cur.fetchone()
+        
+        if result:
+            return {
+                'open_price': float(result[0]) if result[0] else None,
+                'close_price': float(result[1]) if result[1] else None,
+                'high_price': float(result[2]) if result[2] else None,
+                'low_price': float(result[3]) if result[3] else None,
+                'volume': int(result[4]) if result[4] else None,
+                'trade_date': result[5],
+                'data_source': 'database_nearest'
+            }
+        
+        conn.close()
+        
+        # Third try: Yahoo Finance fallback for the specific date
+        return get_yahoo_finance_price_fallback(symbol, target_date)
+        
+    except Exception as e:
+        st.error(f"Error fetching price data for {symbol}: {e}")
+        return get_yahoo_finance_price_fallback(symbol, target_date)
+
+def get_yahoo_finance_price_fallback(symbol: str, target_date):
+    """Fallback to Yahoo Finance for specific date price data"""
+    try:
+        import yfinance as yf
+        from datetime import timedelta
+        
+        # Convert target_date to date object if needed
+        if hasattr(target_date, 'strftime'):
+            date_obj = target_date
+        else:
+            from datetime import datetime
+            date_obj = datetime.strptime(str(target_date), '%Y-%m-%d').date()
+        
+        # Fetch data around the target date
+        start_date = date_obj - timedelta(days=5)
+        end_date = date_obj + timedelta(days=2)
+        
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(start=start_date, end=end_date)
+        
+        if not hist.empty:
+            # Try to find data for the exact date first
+            target_timestamp = date_obj.strftime('%Y-%m-%d')
+            
+            for idx, row in hist.iterrows():
+                if idx.strftime('%Y-%m-%d') == target_timestamp:
+                    return {
+                        'open_price': float(row['Open']),
+                        'close_price': float(row['Close']),
+                        'high_price': float(row['High']),
+                        'low_price': float(row['Low']),
+                        'volume': int(row['Volume']),
+                        'trade_date': date_obj,
+                        'data_source': 'yahoo_exact'
+                    }
+            
+            # If not found, use the closest date
+            latest_row = hist.iloc[-1]
+            return {
+                'open_price': float(latest_row['Open']),
+                'close_price': float(latest_row['Close']),
+                'high_price': float(latest_row['High']),
+                'low_price': float(latest_row['Low']),
+                'volume': int(latest_row['Volume']),
+                'trade_date': hist.index[-1].date(),
+                'data_source': 'yahoo_nearest'
+            }
+        
+    except Exception as e:
+        pass
+    
+    # Final fallback with mock data
+    return {
+        'open_price': 50.0,
+        'close_price': 52.0,
+        'high_price': 53.0,
+        'low_price': 49.5,
+        'volume': 1000000,
+        'trade_date': target_date,
+        'data_source': 'mock_fallback'
+    }
+
+def clear_modal_states():
+    """Clear all modal states to prevent cross-portfolio issues"""
+    st.session_state.show_detail_modal = None
+    st.session_state.show_transaction_modal = None
+    st.session_state.show_technical_modal = None
+    st.session_state.selected_analysis_id = None
+    st.session_state.selected_analysis_date = None
+
+def load_sample_technical_data():
+    """Load sample technical data into the database for demonstration"""
+    try:
+        db = st.session_state.db_manager
+        conn = db.get_connection()
+        cur = conn.cursor()
+        
+        # Sample data for common HK stocks - multiple dates for better testing
+        sample_data = [
+            # 2025-08-31 data
+            ('0700.HK', '2025-08-31', 318.50, 320.00, 314.50, 625.80, 480.30, 65.2, 605.45, 590.80, 602.60, 2.45, 1.35, 8.45, 575.00, 315.00, 15000000),
+            ('1810.HK', '2025-08-31', 13.20, 13.50, 12.80, 68.90, 38.50, 58.7, 54.20, 52.30, 53.85, 1.20, 1.12, 2.85, 50.00, 13.10, 25000000),
+            ('3690.HK', '2025-08-31', 98.30, 101.80, 95.50, 168.20, 89.40, 62.1, 118.45, 114.20, 116.90, 1.85, 1.45, 5.20, 110.00, 97.20, 18000000),
+            ('9618.HK', '2025-08-31', 130.30, 134.70, 128.90, 165.40, 95.80, 56.9, 123.20, 119.60, 122.10, 0.95, 1.28, 4.30, 115.00, 129.10, 12000000),
+            ('9988.HK', '2025-08-31', 118.50, 120.30, 116.20, 178.90, 88.20, 48.3, 122.80, 118.40, 120.95, -0.65, 1.55, 6.10, 112.00, 117.80, 22000000),
+            ('0005.HK', '2025-08-31', 40.20, 40.50, 39.20, 45.80, 35.20, 45.8, 39.85, 38.90, 39.95, 0.85, 1.25, 1.45, 38.50, 39.50, 8500000),
+            ('0939.HK', '2025-08-31', 7.51, 7.62, 7.38, 8.95, 6.20, 52.3, 7.48, 7.35, 7.52, 0.65, 1.18, 0.25, 7.20, 7.45, 45000000),
+            
+            # 2025-08-30 data (previous trading day)
+            ('0700.HK', '2025-08-30', 315.20, 318.50, 312.80, 625.80, 480.30, 64.8, 604.20, 589.50, 601.30, 2.38, 1.32, 8.20, 574.00, 312.50, 14500000),
+            ('1810.HK', '2025-08-30', 13.05, 13.20, 12.65, 68.90, 38.50, 57.9, 53.85, 52.10, 53.60, 1.15, 1.10, 2.80, 49.80, 12.95, 24000000),
+            ('3690.HK', '2025-08-30', 96.80, 98.30, 94.20, 168.20, 89.40, 61.5, 117.20, 113.80, 116.40, 1.78, 1.42, 5.10, 109.50, 96.10, 17500000),
+            ('9618.HK', '2025-08-30', 128.90, 130.30, 127.40, 165.40, 95.80, 56.2, 122.50, 119.20, 121.80, 0.88, 1.25, 4.20, 114.50, 128.20, 11800000),
+            ('9988.HK', '2025-08-30', 117.20, 118.50, 115.80, 178.90, 88.20, 47.8, 122.10, 118.00, 120.50, -0.72, 1.52, 6.00, 111.50, 116.90, 21500000),
+            ('0005.HK', '2025-08-30', 39.80, 40.20, 39.40, 45.80, 35.20, 45.2, 39.60, 38.70, 39.75, 0.82, 1.22, 1.42, 38.30, 39.25, 8200000),
+            ('0939.HK', '2025-08-30', 7.42, 7.51, 7.28, 8.95, 6.20, 51.8, 7.41, 7.32, 7.48, 0.62, 1.15, 0.24, 7.15, 7.38, 44000000),
+            
+            # 2025-08-29 data
+            ('0700.HK', '2025-08-29', 312.50, 315.20, 310.10, 625.80, 480.30, 64.2, 602.80, 588.20, 600.10, 2.31, 1.29, 8.00, 573.00, 310.80, 14200000),
+            ('1810.HK', '2025-08-29', 12.85, 13.05, 12.50, 68.90, 38.50, 57.3, 53.50, 51.90, 53.35, 1.10, 1.08, 2.75, 49.60, 12.80, 23500000),
+            ('3690.HK', '2025-08-29', 95.50, 96.80, 93.80, 168.20, 89.40, 60.9, 116.00, 113.40, 116.00, 1.72, 1.39, 5.00, 109.00, 95.20, 17200000),
+            
+            # Add some older dates for comprehensive testing
+            ('0700.HK', '2025-01-02', 295.50, 298.20, 292.80, 625.80, 480.30, 58.5, 580.20, 570.50, 585.30, 1.85, 1.15, 7.20, 565.00, 293.10, 16500000),
+            ('1810.HK', '2025-01-02', 11.85, 12.15, 11.60, 68.90, 38.50, 52.3, 48.50, 47.90, 48.85, 0.95, 0.98, 2.45, 46.80, 11.75, 28000000),
+            ('0005.HK', '2025-01-02', 37.80, 38.20, 37.40, 45.80, 35.20, 42.2, 37.60, 36.70, 37.75, 0.72, 1.12, 1.32, 36.30, 37.65, 9200000),
+        ]
+        
+        for symbol, date, close, high, low, w52h, w52l, rsi, ema12, ema26, sma20, macd, vol_ratio, atr, support, open_price, volume in sample_data:
+            cur.execute("""
+                INSERT INTO daily_equity_technicals 
+                (symbol, trade_date, open_price, close_price, high_price, low_price, week_52_high, week_52_low,
+                 rsi_14, ema_12, ema_26, sma_20, macd, volume_ratio, atr_14, support_level, volume)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol, trade_date) 
+                DO UPDATE SET
+                    open_price = EXCLUDED.open_price,
+                    close_price = EXCLUDED.close_price,
+                    high_price = EXCLUDED.high_price,
+                    low_price = EXCLUDED.low_price,
+                    week_52_high = EXCLUDED.week_52_high,
+                    week_52_low = EXCLUDED.week_52_low,
+                    rsi_14 = EXCLUDED.rsi_14,
+                    ema_12 = EXCLUDED.ema_12,
+                    ema_26 = EXCLUDED.ema_26,
+                    sma_20 = EXCLUDED.sma_20,
+                    macd = EXCLUDED.macd,
+                    volume_ratio = EXCLUDED.volume_ratio,
+                    atr_14 = EXCLUDED.atr_14,
+                    support_level = EXCLUDED.support_level,
+                    volume = EXCLUDED.volume
+            """, (symbol, date, open_price, close, high, low, w52h, w52l, rsi, ema12, ema26, sma20, macd, vol_ratio, atr, support, volume))
+        
+        conn.commit()
+        conn.close()
+        
+        # Clear cache to force refresh of technical data
+        st.cache_data.clear()
+        st.success(f"✅ Loaded sample technical data for {len(sample_data)} symbols")
+        st.rerun()
+        
+    except Exception as e:
+        st.error(f"Error loading sample data: {e}")
+
+def check_database_health():
+    """Check PostgreSQL database connectivity with detailed diagnostics"""
+    results = {
+        "status": False,
+        "message": "",
+        "version": None,
+        "details": [],
+        "troubleshooting": []
+    }
+    
+    # Check if psycopg2 is available
+    try:
+        import psycopg2
+        results["details"].append("✅ psycopg2 module available")
+    except ImportError:
+        results["details"].append("❌ psycopg2 module not found")
+        results["message"] = "PostgreSQL adapter not installed"
+        results["troubleshooting"].append("Run: pip install psycopg2-binary")
+        return results
+    
+    # Check if PostgreSQL process is running
+    import subprocess
+    try:
+        result = subprocess.run(['pgrep', '-f', 'postgres'], capture_output=True, text=True)
+        if result.stdout:
+            results["details"].append(f"✅ PostgreSQL processes found: {len(result.stdout.strip().split())}")
+        else:
+            results["details"].append("❌ No PostgreSQL processes running")
+            results["troubleshooting"].append("Start PostgreSQL: sudo systemctl start postgresql")
+    except Exception as e:
+        results["details"].append(f"⚠️ Process check failed: {str(e)}")
+    
+    # Try to get database connection from config manager
+    try:
+        config = get_config()
+        primary_conn = config.get_database_url()
+        connection_strings = [
+            (primary_conn, "Configuration file"),
+        ]
+        
+        # Add fallback connection strings as backup
+        fallback_strings = [
+            ("postgresql://trader:${DATABASE_PASSWORD}@localhost:5432/hk_strategy", "Legacy configured user"),
+            ("postgresql://postgres@localhost:5432/hk_strategy", "Default superuser"),
+            ("postgresql://bthia@localhost:5432/hk_strategy", "System user"),
+            ("postgresql://postgres:postgres@localhost:5432/postgres", "Default database")
+        ]
+        
+        # Replace password placeholder if environment variable is available
+        db_password = os.getenv('DATABASE_PASSWORD', 'YOUR_PASSWORD')
+        fallback_strings = [(conn.replace('${DATABASE_PASSWORD}', db_password), desc) for conn, desc in fallback_strings]
+        
+        results["details"].append("✅ Configuration manager loaded successfully")
+        
+    except ConfigurationError as e:
+        results["details"].append(f"⚠️ Configuration error: {str(e)}")
+        results["troubleshooting"].append("Check config/app_config.yaml exists and has valid database credentials")
+        connection_strings = []
+        fallback_strings = [
+            ("postgresql://trader:${DATABASE_PASSWORD}@localhost:5432/hk_strategy", "Legacy configured user"),
+            ("postgresql://postgres@localhost:5432/hk_strategy", "Default superuser"),
+            ("postgresql://bthia@localhost:5432/hk_strategy", "System user"),
+            ("postgresql://postgres:postgres@localhost:5432/postgres", "Default database")
+        ]
+        # Replace password placeholder if environment variable is available
+        db_password = os.getenv('DATABASE_PASSWORD', 'YOUR_PASSWORD')
+        fallback_strings = [(conn.replace('${DATABASE_PASSWORD}', db_password), desc) for conn, desc in fallback_strings]
+    except Exception as e:
+        results["details"].append(f"❌ Failed to load configuration: {str(e)}")
+        results["troubleshooting"].append("Ensure src/config_manager.py is available")
+        connection_strings = []
+        fallback_strings = [
+            ("postgresql://trader:${DATABASE_PASSWORD}@localhost:5432/hk_strategy", "Legacy configured user"),
+            ("postgresql://postgres@localhost:5432/hk_strategy", "Default superuser"),
+            ("postgresql://bthia@localhost:5432/hk_strategy", "System user"),
+            ("postgresql://postgres:postgres@localhost:5432/postgres", "Default database")
+        ]
+        # Replace password placeholder if environment variable is available
+        db_password = os.getenv('DATABASE_PASSWORD', 'YOUR_PASSWORD')
+        fallback_strings = [(conn.replace('${DATABASE_PASSWORD}', db_password), desc) for conn, desc in fallback_strings]
+    
+    all_connections = connection_strings + fallback_strings
+    
+    for conn_str, desc in all_connections:
+        try:
+            conn = psycopg2.connect(conn_str, connect_timeout=3)
+            with conn.cursor() as cur:
+                cur.execute("SELECT version();")
+                version = cur.fetchone()[0]
+                
+                # Test if hk_strategy database exists
+                cur.execute("SELECT datname FROM pg_database WHERE datname = 'hk_strategy';")
+                db_exists = cur.fetchone() is not None
+                
+                # Test if portfolio tables exist
+                cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'portfolio_positions');")
+                table_exists = cur.fetchone()[0]
+                
+            conn.close()
+            
+            results["status"] = True
+            results["message"] = f"Connected via {desc}"
+            results["version"] = version
+            results["details"].append(f"✅ Connection successful: {conn_str.split('@')[0]}@localhost")
+            results["details"].append(f"✅ Database 'hk_strategy' exists: {db_exists}")
+            results["details"].append(f"✅ Portfolio tables exist: {table_exists}")
+            
+            if not db_exists:
+                results["troubleshooting"].append("Create database: CREATE DATABASE hk_strategy;")
+            if not table_exists:
+                results["troubleshooting"].append("Run init.sql to create tables")
+            
+            return results
+            
+        except psycopg2.OperationalError as e:
+            error_msg = str(e)
+            results["details"].append(f"❌ Failed {desc}: {error_msg}")
+            
+            if "password authentication failed" in error_msg:
+                results["troubleshooting"].append(f"Fix authentication for {conn_str.split('@')[0]}")
+            elif "does not exist" in error_msg:
+                results["troubleshooting"].append("Create missing user/database")
+            elif "could not connect" in error_msg:
+                results["troubleshooting"].append("Check PostgreSQL service is running")
+                
+        except Exception as e:
+            results["details"].append(f"❌ Error {desc}: {str(e)}")
+    
+    results["message"] = "All connection attempts failed"
+    results["troubleshooting"].extend([
+        "1. Check PostgreSQL is installed and running",
+        "2. Create hk_strategy database and user",
+        "3. Run setup commands in terminal"
+    ])
+    
+    return results
+
+def check_redis_health():
+    """Check Redis connectivity with detailed diagnostics"""
+    results = {
+        "status": False,
+        "message": "",
+        "info": None,
+        "details": [],
+        "troubleshooting": []
+    }
+    
+    # Check if redis module is available
+    try:
+        import redis
+        results["details"].append("✅ redis module available")
+    except ImportError:
+        results["details"].append("❌ redis module not found")
+        results["message"] = "Redis Python client not installed"
+        results["troubleshooting"].append("Run: pip install redis")
+        return results
+    
+    # Check if Redis process is running
+    import subprocess
+    try:
+        result = subprocess.run(['pgrep', '-f', 'redis'], capture_output=True, text=True)
+        if result.stdout:
+            results["details"].append(f"✅ Redis processes found: {len(result.stdout.strip().split())}")
+        else:
+            results["details"].append("❌ No Redis processes running")
+            results["troubleshooting"].append("Start Redis: sudo systemctl start redis")
+    except Exception as e:
+        results["details"].append(f"⚠️ Process check failed: {str(e)}")
+    
+    # Test Redis connection using config manager
+    try:
+        # Try to get Redis connection from config manager
+        try:
+            config = get_config()
+            redis_config = config.get_redis_config()
+            results["details"].append("✅ Redis configuration loaded from config manager")
+            r = redis.Redis(**redis_config, decode_responses=True)
+        except (ConfigurationError, Exception) as e:
+            results["details"].append(f"⚠️ Config manager failed: {str(e)}")
+            results["details"].append("Falling back to default Redis connection")
+            r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True, socket_connect_timeout=3)
+        
+        # Test ping
+        ping_result = r.ping()
+        results["details"].append(f"✅ Ping successful: {ping_result}")
+        
+        # Get Redis info
+        info = r.info()
+        results["status"] = True
+        results["message"] = f"Redis {info['redis_version']} connected"
+        results["info"] = f"Memory: {info['used_memory_human']}, Uptime: {info['uptime_in_seconds']}s"
+        results["details"].append(f"✅ Version: {info['redis_version']}")
+        results["details"].append(f"✅ Connected clients: {info['connected_clients']}")
+        results["details"].append(f"✅ Memory usage: {info['used_memory_human']}")
+        
+        # Test read/write
+        test_key = "health_check_test"
+        r.set(test_key, "test_value", ex=10)
+        test_value = r.get(test_key)
+        if test_value == "test_value":
+            results["details"].append("✅ Read/write test successful")
+        else:
+            results["details"].append("❌ Read/write test failed")
+            
+    except redis.ConnectionError as e:
+        results["details"].append(f"❌ Connection error: {str(e)}")
+        results["message"] = "Cannot connect to Redis server"
+        results["troubleshooting"].extend([
+            "Check Redis is installed: redis-server --version",
+            "Start Redis: sudo systemctl start redis",
+            "Check port 6379 is available: netstat -tlnp | grep 6379"
+        ])
+    except redis.AuthenticationError as e:
+        results["details"].append(f"❌ Authentication error: {str(e)}")
+        results["message"] = "Redis authentication failed"
+        results["troubleshooting"].append("Check Redis password configuration")
+    except Exception as e:
+        results["details"].append(f"❌ Unexpected error: {str(e)}")
+        results["message"] = f"Redis check failed: {str(e)}"
+        results["troubleshooting"].append("Check Redis configuration and logs")
+    
+    return results
+
+def check_yfinance_health():
+    """Check Yahoo Finance API connectivity with detailed diagnostics"""
+    results = {
+        "status": False,
+        "message": "",
+        "test_data": None,
+        "details": [],
+        "troubleshooting": []
+    }
+    
+    # Check if yfinance module is available
+    try:
+        import yfinance as yf
+        results["details"].append("✅ yfinance module available")
+    except ImportError:
+        results["details"].append("❌ yfinance module not found")
+        results["message"] = "Yahoo Finance library not installed"
+        results["troubleshooting"].append("Run: pip install yfinance")
+        return results
+    
+    # Check internet connectivity
+    import urllib.request
+    try:
+        urllib.request.urlopen('https://finance.yahoo.com', timeout=5)
+        results["details"].append("✅ Internet connectivity to Yahoo Finance")
+    except Exception as e:
+        results["details"].append(f"❌ Internet connectivity failed: {str(e)}")
+        results["troubleshooting"].append("Check internet connection")
+        results["troubleshooting"].append("Check firewall/proxy settings")
+    
+    # Test with multiple symbols
+    test_symbols = [
+        ("AAPL", "US Stock"),
+        ("0005.HK", "Hong Kong Stock"),
+        ("MSFT", "US Stock Alternative")
+    ]
+    
+    successful_tests = 0
+    for symbol, desc in test_symbols:
+        try:
+            stock = yf.Ticker(symbol)
+            
+            # Test historical data
+            hist = stock.history(period="2d")
+            if not hist.empty:
+                price = hist['Close'].iloc[-1]
+                results["details"].append(f"✅ {desc} ({symbol}): ${price:.2f}")
+                successful_tests += 1
+                
+                if successful_tests == 1:  # Use first successful test as main result
+                    results["test_data"] = f"{symbol}: ${price:.2f}"
+            else:
+                results["details"].append(f"❌ {desc} ({symbol}): No historical data")
+                
+            # Test info data
+            try:
+                info = stock.info
+                if info and len(info) > 1:
+                    company_name = info.get('longName', info.get('shortName', 'Unknown'))
+                    results["details"].append(f"✅ {symbol} company info: {company_name}")
+                else:
+                    results["details"].append(f"⚠️ {symbol} info data limited")
+            except:
+                results["details"].append(f"⚠️ {symbol} info fetch failed")
+                
+        except Exception as e:
+            results["details"].append(f"❌ {desc} ({symbol}) error: {str(e)}")
+    
+    if successful_tests > 0:
+        results["status"] = True
+        results["message"] = f"Yahoo Finance API working ({successful_tests}/{len(test_symbols)} symbols)"
+    else:
+        results["message"] = "Yahoo Finance API failed for all test symbols"
+        results["troubleshooting"].extend([
+            "Check internet connection",
+            "Yahoo Finance may be temporarily unavailable",
+            "Try again in a few minutes",
+            "Check if Yahoo Finance API has changed"
+        ])
+    
+    # Check rate limiting
+    if successful_tests < len(test_symbols):
+        results["troubleshooting"].append("Possible rate limiting - reduce API calls frequency")
+    
+    return results
+
+def trigger_portfolio_refresh_after_save(portfolio_id: str, changes_made: list):
+    """Trigger comprehensive portfolio refresh after successful save operations"""
+    try:
+        # 1. Force recalculation of cached portfolio metrics
+        if 'portfolio_metrics_cache' in st.session_state:
+            del st.session_state['portfolio_metrics_cache']
+        
+        # 2. Refresh position-related caches
+        if 'position_count_cache' in st.session_state:
+            del st.session_state['position_count_cache']
+            
+        # 3. Auto-update OHLCV data for changed symbols
+        if changes_made and portfolio_id:
+            # Extract symbols that were updated from changes_made
+            updated_symbols = []
+            for change in changes_made:
+                if "Updated" in change or "Added" in change:
+                    # Extract symbol from messages like "Updated 1211.HK" or "Added 0700.HK"
+                    parts = change.split(' ')
+                    if len(parts) >= 2:
+                        symbol = parts[1]
+                        if '.' in symbol:  # Basic symbol validation
+                            updated_symbols.append(symbol)
+            
+            if updated_symbols:
+                # Initialize portfolio prices cache if needed
+                if portfolio_id not in st.session_state.portfolio_prices:
+                    st.session_state.portfolio_prices[portfolio_id] = {}
+                
+                # Background OHLCV update for changed symbols
+                st.info(f"🔄 Auto-updating market data for {len(updated_symbols)} changed position(s)...")
+                with st.spinner("Fetching latest market prices..."):
+                    for symbol in updated_symbols:
+                        try:
+                            price, status = fetch_hk_price(symbol)
+                            st.session_state.portfolio_prices[portfolio_id][symbol] = price
+                        except Exception as e:
+                            st.warning(f"⚠️ Could not update price for {symbol}: {str(e)}")
+                    
+                    # Update last update timestamp
+                    st.session_state.last_update[portfolio_id] = datetime.now()
+                    
+                st.success(f"💰 Market data updated for: {', '.join(updated_symbols)}")
+        
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ Portfolio refresh partially failed: {str(e)}")
+        return False
+
+def check_portfolio_has_analyses(portfolio_id: str) -> tuple[bool, int, str]:
+    """
+    Check if portfolio has existing analyses that would restrict updates
+    
+    Returns:
+        tuple[bool, int, str]: (has_analyses, count, message)
+    """
+    try:
+        if 'portfolio_analysis_manager' in st.session_state:
+            analyses_df = st.session_state.portfolio_analysis_manager.get_analysis_summary(portfolio_id)
+            analysis_count = len(analyses_df)
+            
+            if analysis_count > 0:
+                return True, analysis_count, f"Portfolio has {analysis_count} existing analysis/analyses"
+            else:
+                return False, 0, "No analyses found"
+        else:
+            return False, 0, "Analysis manager not available"
+    except Exception as e:
+        return False, 0, f"Error checking analyses: {str(e)}"
+
+def get_system_info():
+    """Get system information"""
+    try:
+        return {
+            "Python Version": f"{sys.version.split()[0]}",
+            "Platform": platform.platform(),
+            "Streamlit Version": st.__version__,
+            "Pandas Version": pd.__version__,
+            "YFinance Version": yf.__version__ if hasattr(yf, '__version__') else "Unknown",
+            "Working Directory": os.getcwd(),
+            "Process ID": os.getpid()
+        }
+    except Exception as e:
+        return {"Error": str(e)}
 
 # Initialize unified navigation state
 if 'navigation' not in st.session_state:

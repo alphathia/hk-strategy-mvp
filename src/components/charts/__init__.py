@@ -1,33 +1,75 @@
 """
-Chart Components for HK Strategy Dashboard.
+Chart Components Package.
 
-This module contains chart components for displaying financial data
-with Plotly integration. All charts inherit from BaseChart.
+Plotly-based chart components for data visualization.
+All chart components inherit from BaseChart and provide factory pattern access.
 """
 
-from .base_chart import BaseChart
+from .base_chart import BaseChart, CandlestickChart, LineChart
+from .price_chart import PriceChart, SimplePriceChart
+from .portfolio_chart import (
+    PortfolioComparisonChart, 
+    PortfolioAllocationChart, 
+    PortfolioPnLChart,
+    PortfolioPerformanceChart,
+    PortfolioSummaryCharts
+)
+from .indicator_chart import (
+    RSIChart,
+    MACDChart, 
+    BollingerBandsChart,
+    MultiIndicatorChart
+)
 
-# Chart registry - populated as charts are implemented
+# Chart registry for factory pattern
 CHART_REGISTRY = {
-    # Will be populated with actual chart implementations
-    # 'price': PriceChart,
-    # 'portfolio': PortfolioChart,
-    # 'indicators': IndicatorsChart,
-    # 'comparison': ComparisonChart,
+    'base': BaseChart,
+    'candlestick': CandlestickChart,
+    'line': LineChart,
+    'price': PriceChart,
+    'simple_price': SimplePriceChart,
+    'portfolio_comparison': PortfolioComparisonChart,
+    'portfolio_allocation': PortfolioAllocationChart,
+    'portfolio_pnl': PortfolioPnLChart,
+    'portfolio_performance': PortfolioPerformanceChart,
+    'rsi': RSIChart,
+    'macd': MACDChart,
+    'bollinger_bands': BollingerBandsChart,
+    'multi_indicator': MultiIndicatorChart
 }
 
+def get_chart(chart_type: str) -> type:
+    """
+    Get chart class by type.
+    
+    Args:
+        chart_type: Type of chart to get
+        
+    Returns:
+        Chart class or None if not found
+    """
+    return CHART_REGISTRY.get(chart_type)
+
+def create_chart(chart_type: str, *args, **kwargs):
+    """
+    Create chart instance by type.
+    
+    Args:
+        chart_type: Type of chart to create
+        *args: Positional arguments for chart
+        **kwargs: Keyword arguments for chart
+        
+    Returns:
+        Chart instance or None if type not found
+    """
+    chart_class = get_chart(chart_type)
+    return chart_class(*args, **kwargs) if chart_class else None
+
 __all__ = [
-    'BaseChart',
-    'CHART_REGISTRY'
+    'BaseChart', 'CandlestickChart', 'LineChart',
+    'PriceChart', 'SimplePriceChart',
+    'PortfolioComparisonChart', 'PortfolioAllocationChart', 'PortfolioPnLChart',
+    'PortfolioPerformanceChart', 'PortfolioSummaryCharts',
+    'RSIChart', 'MACDChart', 'BollingerBandsChart', 'MultiIndicatorChart',
+    'CHART_REGISTRY', 'get_chart', 'create_chart'
 ]
-
-
-def get_chart(chart_key: str):
-    """Get chart class by key."""
-    return CHART_REGISTRY.get(chart_key)
-
-
-def create_chart(chart_key: str, **kwargs):
-    """Create chart instance by key."""
-    chart_class = get_chart(chart_key)
-    return chart_class(**kwargs) if chart_class else None

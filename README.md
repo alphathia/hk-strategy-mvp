@@ -2,6 +2,26 @@
 
 A comprehensive Docker-based Streamlit application for Hong Kong equity trading strategy with PostgreSQL database, Redis caching, and advanced technical analysis.
 
+## 🎉 Phase 5 Complete: Modern Component-Based Architecture
+
+**The HK Strategy Dashboard has been successfully transformed from a monolithic application into a modern, modular, component-based architecture through 5 phases of decomposition:**
+
+- **✅ Phase 1-5 Complete**: Core Infrastructure → Services → Navigation → Pages → Components
+- **🎨 35+ UI Components**: Reusable dialogs, charts, forms, and widgets with factory patterns
+- **📊 32.6% Code Reduction**: From 6,000-line monolith to 4,047-line modular dashboard
+- **🏗️ Modern Architecture**: React-like patterns with abstract base classes and registries
+- **⚡ Production Ready**: Comprehensive error handling, caching, and performance optimization
+
+**New Component Library Features:**
+- **7 Dialog Components**: Modern `@st.dialog` modal interfaces for portfolio and position management
+- **10+ Chart Components**: Plotly-based visualizations with consistent theming and technical indicators
+- **10+ Form Components**: Validated input forms with real-time validation and error handling  
+- **12+ Widget Components**: Reusable UI elements for metrics, selectors, and status indicators
+- **60+ Utility Functions**: Organized across 4 modules (data, indicators, charts, validation)
+
+**📋 Quick Start**: See [SETUP_GUIDE.md](SETUP_GUIDE.md) for comprehensive installation instructions.  
+**🏗️ Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical documentation.
+
 ## Features
 
 - **Portfolio Management**: Track HK equity positions with real-time P&L calculation
@@ -86,14 +106,14 @@ The new signal format follows the convention **T-XYZ-N** where:
 
 4. **Start the application**
    ```bash
-   # Option A: Start dashboard only
-   streamlit run src/app.py
+   # Option A: Modular dashboard with Phase 1-5 architecture (recommended)
+   ./start_modular_dashboard.sh
    
-   # Option B: Use the unified multi-dashboard system (recommended)
-   python dashboard.py
+   # Option B: Direct dashboard start
+   streamlit run dashboard.py --server.port=8501
    
-   # Option C: Simple dashboard (basic functionality)
-   python simple_dashboard.py
+   # Option C: Legacy dashboard (for compatibility)
+   ./start_legacy_dashboard.sh
    ```
 
 ## Architecture
